@@ -1,8 +1,8 @@
 {
   "name": "@i2bskn/workers-app-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Sign-in, user management and MCP OAuth for Hono apps on Cloudflare Workers with D1.",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/i2bskn/workers-app-core.git"

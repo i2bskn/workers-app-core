@@ -274,4 +274,4 @@ and `D1_MAX_BOUND_VALUES`.
 
 ## License
 
-Apache-2.0
+MIT
