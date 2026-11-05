@@ -1,0 +1,33 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "workers-app-core-fixture",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-23",
+  // Required for OAuth clients that use Client ID Metadata Documents: fetches of their metadata
+  // must not reach internal addresses.
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "single-page-application",
+    // Every path the package handles. Apps add their own.
+    "run_worker_first": [
+      "/api/*",
+      "/auth",
+      "/auth/*",
+      "/authorize",
+      "/mcp",
+      "/mcp/*",
+      "/oauth/*",
+      "/.well-known/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "workers-app-core-fixture",
+      "migrations_dir": "drizzle/migrations"
+    }
+  ],
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }]
+  // JWT_SECRET is a secret (at least 32 characters); the tests set it in vitest.config.ts.
+}

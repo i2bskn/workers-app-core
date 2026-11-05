@@ -1,0 +1,69 @@
+{
+  "name": "@i2bskn/workers-app-core",
+  "version": "0.1.0",
+  "description": "Sign-in, user management and MCP OAuth for Hono apps on Cloudflare Workers with D1.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/i2bskn/workers-app-core.git"
+  },
+  "type": "module",
+  "packageManager": "pnpm@10.28.1",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/db/schema.d.ts",
+      "default": "./dist/db/schema.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "pnpm run build && pnpm run test"
+  },
+  "peerDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
+    "@cloudflare/workers-oauth-provider": "^1.2.3",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.16",
+    "openid-client": "^6.8.8"
+  },
+  "devDependencies": {
+    "@cfworker/json-schema": "4.1.1",
+    "@cloudflare/vitest-plugin": "1.4.9",
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@cloudflare/workers-types": "5.20261028.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "drizzle-kit": "0.31.11",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.16",
+    "openid-client": "6.8.8",
+    "typescript": "7.0.2",
+    "vitest": "4.1.12",
+    "wrangler": "4.154.0",
+    "zod": "4.6.7"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  }
+}
