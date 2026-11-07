@@ -1,11 +1,9 @@
-import { GrantType, type OAuthProviderOptions } from "@cloudflare/workers-oauth-provider";
+import type { OAuthProviderOptions } from "@cloudflare/workers-oauth-provider";
 import type { CoreBindings } from "../config.js";
-import { MCP_SCOPE, isMcpProps } from "./handler.js";
+import { MCP_SCOPE } from "./handler.js";
 
 export const MCP_ACCESS_TOKEN_TTL_SECONDS = 12 * 60 * 60;
 export const MCP_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60;
-// The same lifetime as a web session in oidc mode.
-export const MCP_OIDC_REFRESH_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 
 export type FetchHandler<AppBindings> = {
   fetch(request: Request, env: AppBindings, ctx: ExecutionContext): Response | Promise<Response>;
@@ -32,11 +30,5 @@ export function buildOAuthProviderOptions<AppBindings extends CoreBindings>(
     // deletions take effect immediately. On refresh, the library caps it at the grant's remaining lifetime.
     accessTokenTTL: MCP_ACCESS_TOKEN_TTL_SECONDS,
     refreshTokenTTL: MCP_REFRESH_TOKEN_TTL_SECONDS,
-    tokenExchangeCallback: ({ grantType, props }) => {
-      if (grantType === GrantType.AUTHORIZATION_CODE && isMcpProps(props) && props.authMode === "oidc") {
-        return { refreshTokenTTL: MCP_OIDC_REFRESH_TOKEN_TTL_SECONDS };
-      }
-      return undefined;
-    },
   };
 }

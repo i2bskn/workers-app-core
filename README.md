@@ -238,7 +238,7 @@ An invalid configuration answers every request with 500 without details, and log
 - Web sessions last 30 days in password mode and 24 hours in oidc mode, from the sign-in; refreshing rotates the
   refresh token without extending that. Reusing a rotated refresh token more than 10 seconds later revokes the whole
   session family. Switching `AUTH_MODE` revokes the sessions of the other mode on their next refresh.
-- MCP access tokens last 12 hours, refresh tokens 30 days (24 hours in oidc mode).
+- MCP access tokens last 12 hours, refresh tokens 30 days in both modes.
 - `ALLOWED_EMAILS`: an entry that is exactly `*` allows everyone; an empty list allows no one. Other entries match
   the whole email when they contain `@`, otherwise the domain exactly (subdomains do not match). Existing oidc
   sessions of users removed from the list are revoked on their next refresh.

@@ -447,7 +447,7 @@ describe("grant lifetime", () => {
     expect(expiresAt).toBeLessThanOrEqual(after + 2_592_000);
   });
 
-  it("is 24 hours in oidc mode", async () => {
+  it("is 30 days in oidc mode", async () => {
     const cookies = await oidcSessionCookies(member);
     const before = Math.floor(Date.now() / 1000);
     await authorizeClient(cookies, { origin: OIDC_ORIGIN, env: oidcEnv });
@@ -455,8 +455,8 @@ describe("grant lifetime", () => {
     const { items } = await oauthApi(OIDC_ORIGIN, oidcEnv).listUserGrants(member.id);
     expect(items).toHaveLength(1);
     const expiresAt = items[0]?.expiresAt ?? 0;
-    expect(expiresAt).toBeGreaterThanOrEqual(before + 86_400);
-    expect(expiresAt).toBeLessThanOrEqual(after + 86_400);
+    expect(expiresAt).toBeGreaterThanOrEqual(before + 2_592_000);
+    expect(expiresAt).toBeLessThanOrEqual(after + 2_592_000);
   });
 });
 
