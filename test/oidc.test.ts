@@ -4,7 +4,7 @@ import { env as workerEnv } from "cloudflare:workers";
 import { evaluateIdTokenClaims, isEmailVerified } from "../src/auth/oidc.js";
 import { base64UrlEncode } from "../src/auth/tokens.js";
 import { resolveOidcUser, type OidcIdentity } from "../src/auth/users.js";
-import { users } from "../src/db/schema.js";
+import { sessions, users } from "../src/db/schema.js";
 import { loadConfig, type CoreBindings } from "../src/config.js";
 import {
   createUser,
@@ -421,6 +421,43 @@ describe("OIDC flow with a mocked IdP", () => {
     expect(res.headers.get("Location")).toBe("/wiki");
     const user = await db.select().from(users).where(eq(users.oidcSubject, "sub-1")).get();
     expect(user?.email).toBe("alice@outside.test");
+  });
+
+  it("denies first registration before creating a user or session", async () => {
+    idTokenClaims = { ...idTokenClaims, email: " Alice@Example.com ", hd: "example.com" };
+    const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(false);
+    hooks.beforeOidcUserLinkOrCreate = check;
+    expect((await loginWith(oidcEnv)).status).toBe(403);
+    expect(check).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      operation: "create", email: "alice@example.com", issuer: ISSUER, subject: "sub-1",
+      claims: expect.objectContaining({ hd: "example.com", email_verified: true }),
+    }));
+    expect(await db.select().from(users).all()).toHaveLength(0);
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+  });
+
+  it("checks initial linking before updating and skips subsequent logins of the linked subject", async () => {
+    const existing = await createUser({ email: "alice@example.com" });
+    const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>()
+      .mockResolvedValueOnce(false).mockResolvedValueOnce(true).mockResolvedValue(false);
+    hooks.beforeOidcUserLinkOrCreate = check;
+    expect((await loginWith(oidcEnv)).status).toBe(403);
+    expect(await db.select().from(users).where(eq(users.id, existing.id)).get()).toMatchObject({ oidcSubject: null });
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+    expect((await loginWith(oidcEnv)).status).toBe(303);
+    idTokenClaims = { ...idTokenClaims, email: "new@example.com" };
+    expect((await loginWith(oidcEnv)).status).toBe(303);
+    expect(check.mock.calls.map(([args]) => args.operation)).toEqual(["link", "link"]);
+    expect(await db.select().from(users).where(eq(users.id, existing.id)).get()).toMatchObject({
+      email: "new@example.com", oidcSubject: "sub-1",
+    });
+  });
+
+  it("fails closed when the initial identity check throws", async () => {
+    hooks.beforeOidcUserLinkOrCreate = async () => { throw new Error("identity check failed"); };
+    expect((await loginWith(oidcEnv)).status).toBe(500);
+    expect(await db.select().from(users).all()).toHaveLength(0);
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
   });
 
   it("calls beforeSessionIssued with the resolved user before the session is issued", async () => {

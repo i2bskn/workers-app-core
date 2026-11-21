@@ -155,6 +155,12 @@ Every hook is optional; without hooks only the package's own statements run.
   statement must guard itself with `EXISTS (SELECT 1 FROM users WHERE id = ?)`. Success is still decided by the
   INSERT. `d1` is `db.$client`. A UNIQUE violation in your statements fails the request with 500; only a violation
   of the `users` table itself is answered as a duplicate (`email_taken`, or a retry on the OIDC path).
+- `beforeOidcUserLinkOrCreate({ operation, env, db, issuer, subject, email, claims })`: after ID token and allowlist
+  checks, authorize the first association with an OIDC identity. Return `true` to allow linking an existing user
+  (`operation === "link"`) or creating a user (`"create"`), or `false` for a 403 before the user write or session
+  issuance. An exception fails the request with 500. The hook receives the normalized email and the verified token
+  claims. Already linked issuer/subject pairs skip this hook, including when the email changes. Concurrent sign-ins
+  can cause a retry: use this hook for checks, and commit one-time effects atomically with the user write.
 - `beforeSessionIssued({ env, db, userId, now })`: called right before a web session is issued or rotated on sign-in:
   password login (after the password check), the OIDC callback (after the user is resolved), `POST /auth/refresh` and
   `GET /auth/login` with a valid refresh cookie (after the rotation, before the cookies). Not called on the setup, or

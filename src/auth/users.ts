@@ -78,9 +78,11 @@ export type OidcIdentity = {
   name: string | null;
 };
 
+type AllowOidcUserWrite = (operation: "link" | "create") => Promise<boolean>;
+
 export type OidcUserResult =
   | { ok: true; user: UserRow }
-  | { ok: false; reason: "conflict" | "failed" };
+  | { ok: false; reason: "conflict" | "not_allowed" | "failed" };
 
 // Maps an OIDC identity to a user, creating one just in time (spec 6.6).
 export async function resolveOidcUser(
@@ -88,9 +90,10 @@ export async function resolveOidcUser(
   identity: OidcIdentity,
   now: number,
   userCreatedStatements?: UserCreatedStatements,
+  allowWrite?: AllowOidcUserWrite,
 ): Promise<OidcUserResult> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await tryResolveOidcUser(db, identity, now, userCreatedStatements);
+    const result = await tryResolveOidcUser(db, identity, now, userCreatedStatements, allowWrite);
     if (result !== "retry") return result;
   }
   return { ok: false, reason: "failed" };
@@ -101,6 +104,7 @@ async function tryResolveOidcUser(
   identity: OidcIdentity,
   now: number,
   userCreatedStatements: UserCreatedStatements,
+  allowWrite?: AllowOidcUserWrite,
 ): Promise<OidcUserResult | "retry"> {
   const { issuer, subject, email, name } = identity;
 
@@ -122,8 +126,9 @@ async function tryResolveOidcUser(
   }
 
   const byEmail = await findUserByEmail(db, email);
+  if (byEmail && byEmail.oidcSubject !== null) return { ok: false, reason: "conflict" };
+  if (allowWrite && !(await allowWrite(byEmail ? "link" : "create"))) return { ok: false, reason: "not_allowed" };
   if (byEmail) {
-    if (byEmail.oidcSubject !== null) return { ok: false, reason: "conflict" };
     try {
       const result = await db
         .update(users)

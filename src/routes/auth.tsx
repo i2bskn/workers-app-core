@@ -220,15 +220,19 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
       return c.html(<ErrorPage Layout={Layout} message="ログインに失敗しました" />, 400);
     }
 
+    const beforeWrite = hooks.beforeOidcUserLinkOrCreate;
     const resolved = await resolveOidcUser(
       db,
       { issuer: iss, subject: sub, email: evaluated.email, name: evaluated.name },
       now,
       hooks.userCreatedStatements,
+      beforeWrite
+        ? (operation) => beforeWrite({ operation, env: c.env, db, issuer: iss, subject: sub, email: evaluated.email, claims })
+        : undefined,
     );
     if (!resolved.ok) {
-      if (resolved.reason === "conflict") {
-        console.warn("oidc login rejected", { reason: "identity_conflict" });
+      if (resolved.reason === "conflict" || resolved.reason === "not_allowed") {
+        console.warn("oidc login rejected", { reason: resolved.reason === "conflict" ? "identity_conflict" : "not_allowed" });
         return c.html(<ErrorPage Layout={Layout} message="このアカウントではログインできません" />, 403);
       }
       console.error("oidc user resolution failed");

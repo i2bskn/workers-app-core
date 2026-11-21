@@ -12,6 +12,16 @@ export type UserDeleteStatements<DeleteData> = {
 
 // Every hook is optional. Without hooks, nothing runs besides the package's own statements.
 export type CoreHooks<AppBindings, DeleteData> = {
+  // Authorize an initial OIDC identity association before writing the user. Linked identities skip this hook.
+  beforeOidcUserLinkOrCreate?(args: {
+    operation: "link" | "create";
+    env: AppBindings;
+    db: Db;
+    issuer: string;
+    subject: string;
+    email: string;
+    claims: Readonly<Record<string, unknown>>;
+  }): Promise<boolean>;
   // Appended after the INSERT of a user, in the same batch: the initial setup, the first OIDC sign-in, and
   // POST /api/v1/users. The INSERT of the setup may insert nothing, so each statement must guard itself with
   // EXISTS (SELECT 1 FROM users WHERE id = ?).
