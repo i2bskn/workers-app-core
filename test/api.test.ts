@@ -15,6 +15,7 @@ import {
   resetDb,
   send,
   sessionCookies,
+  testConfig,
   type SessionCookies,
 } from "./helpers.js";
 
@@ -66,7 +67,7 @@ describe("GET /api/v1/me", () => {
   });
 
   it("rejects tokens with a different audience or secret", async () => {
-    const session = await issueSession(db, member.id, "password", Date.now());
+    const session = await issueSession(db, member.id, testConfig(), Date.now());
     const wrongSecret = await core.signAccessToken(
       { sub: member.id, sid: session.sessionId },
       "another-secret-another-secret-another-secret",
@@ -122,7 +123,7 @@ describe("POST /api/v1/me/password", () => {
 
   it("returns password_not_set for users without a password", async () => {
     const oidcUser = await createUser({ email: "oidc@example.com", password: null });
-    const session = await issueSession(db, oidcUser.id, "password", Date.now());
+    const session = await issueSession(db, oidcUser.id, testConfig(), Date.now());
     const at = await core.signAccessToken({ sub: oidcUser.id, sid: session.sessionId }, env.JWT_SECRET ?? "", Date.now());
     const res = await send("/api/v1/me/password", {
       cookies: { "__Host-testapp_at": at },
@@ -266,7 +267,7 @@ describe("admin user API", () => {
 describe("middleware order", () => {
   async function oidcCookiesFor(user: UserRow): Promise<SessionCookies> {
     const now = Date.now();
-    const session = await issueSession(db, user.id, "oidc", now);
+    const session = await issueSession(db, user.id, testConfig(oidcEnv), now);
     const at = await core.signAccessToken({ sub: user.id, sid: session.sessionId }, env.JWT_SECRET ?? "", now);
     return { "__Host-testapp_at": at, "__Host-testapp_rt": session.refreshToken };
   }

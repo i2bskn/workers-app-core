@@ -1,15 +1,10 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { sessions, users, type SessionRow, type UserRow } from "../db/schema.js";
-import type { AuthMode, Config } from "../config.js";
+import type { Config, SessionConfig } from "../config.js";
 import { isEmailAllowed, parseAllowlist } from "./allowlist.js";
 import { generateRefreshToken, hashToken } from "./tokens.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-export const FAMILY_LIFETIME_MS: Record<AuthMode, number> = {
-  password: 30 * DAY_MS,
-  oidc: DAY_MS,
-};
 export const REUSE_GRACE_MS = 10 * 1000;
 
 export type NewSession = {
@@ -17,15 +12,31 @@ export type NewSession = {
   userId: string;
   refreshToken: string;
   familyExpiresAt: number;
+  // The expiry of this refresh token: the absolute expiry, or the idle deadline if it comes first.
+  expiresAt: number;
 };
 
-export async function prepareNewSession(db: Db, userId: string, mode: AuthMode, now: number) {
+// The expiry of a session row. Without an idle timeout it is the absolute expiry of the family. With one, it is the
+// earlier of the absolute expiry and the idle deadline, counted from the row's creation (the family's last refresh)
+// with the current setting.
+export function sessionExpiresAt(
+  row: Pick<SessionRow, "familyExpiresAt" | "createdAt">,
+  session: SessionConfig,
+): number {
+  if (session.idleTimeoutMs === null) return row.familyExpiresAt;
+  return Math.min(row.familyExpiresAt, row.createdAt + session.idleTimeoutMs);
+}
+
+export async function prepareNewSession(db: Db, userId: string, config: Config, now: number) {
+  const mode = config.authMode;
   const refreshToken = generateRefreshToken();
+  const familyExpiresAt = now + config.session.maxAgeMs;
   const session: NewSession = {
     sessionId: crypto.randomUUID(),
     userId,
     refreshToken,
-    familyExpiresAt: now + FAMILY_LIFETIME_MS[mode],
+    familyExpiresAt,
+    expiresAt: sessionExpiresAt({ familyExpiresAt, createdAt: now }, config.session),
   };
   const insert = db.insert(sessions).values({
     id: session.sessionId,
@@ -40,8 +51,8 @@ export async function prepareNewSession(db: Db, userId: string, mode: AuthMode, 
 }
 
 // Login: insert a new session family and record the login time in one batch.
-export async function issueSession(db: Db, userId: string, mode: AuthMode, now: number): Promise<NewSession> {
-  const { session, insert } = await prepareNewSession(db, userId, mode, now);
+export async function issueSession(db: Db, userId: string, config: Config, now: number): Promise<NewSession> {
+  const { session, insert } = await prepareNewSession(db, userId, config, now);
   await db.batch([
     insert,
     db.update(users).set({ lastLoginAt: now, updatedAt: now }).where(eq(users.id, userId)),
@@ -127,6 +138,8 @@ export async function rotateSession(
           userId: row.userId,
           refreshToken: newRefreshToken,
           familyExpiresAt: row.familyExpiresAt,
+          // The new row is created at now.
+          expiresAt: sessionExpiresAt({ familyExpiresAt: row.familyExpiresAt, createdAt: now }, config.session),
         },
       };
     }
@@ -137,7 +150,7 @@ export async function rotateSession(
   }
 }
 
-// Steps 2-6 of the rotation. Returns a failure, or null if the session may be rotated.
+// Steps 2-6 of the rotation, then the idle timeout. Returns a failure, or null if the session may be rotated.
 async function checkRotatable(
   db: Db,
   config: Config,
@@ -164,6 +177,9 @@ async function checkRotatable(
     await revokeFamilyQuery(db, row.familyId, now).run();
     return fail(true);
   }
+  // After the reuse check, so that a rotated token presented after the idle timeout still revokes the family. The
+  // family is not revoked here: a concurrent request may have read the row before the winner rotated it.
+  if (sessionExpiresAt(row, config.session) <= now) return fail(true);
   return null;
 }
 

@@ -1,21 +1,30 @@
 import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { issueSession, revokeFamilyQuery, rotateSession, rotationStatements } from "../src/auth/sessions.js";
+import {
+  issueSession,
+  revokeFamilyQuery,
+  rotateSession,
+  rotationStatements,
+  sessionExpiresAt,
+} from "../src/auth/sessions.js";
 import { hashToken } from "../src/auth/tokens.js";
 import { clock } from "../src/clock.js";
 import { sessions, type UserRow } from "../src/db/schema.js";
 import { loadConfig } from "../src/config.js";
 import { env } from "cloudflare:workers";
+import { core } from "./fixture/src/index.js";
 import {
   createUser,
   db,
   login,
   OIDC_ORIGIN,
   oidcEnv,
+  PASSWORD,
   resetDb,
   send,
   sessionCookies,
   setCookies,
+  testConfig,
   type SessionCookies,
 } from "./helpers.js";
 
@@ -121,7 +130,7 @@ describe("refresh", () => {
   });
 
   it("does not create a session when the family is revoked between UPDATE and INSERT", async () => {
-    const issued = await issueSession(db, alice.id, "password", T0);
+    const issued = await issueSession(db, alice.id, testConfig(), T0);
     const old = await db.select().from(sessions).where(eq(sessions.id, issued.sessionId)).get();
     if (!old) throw new Error("missing session");
     const newId = crypto.randomUUID();
@@ -152,7 +161,7 @@ describe("refresh", () => {
   it("succeeds only once when rotateSession runs twice with the same time", async () => {
     const config = loadConfig(env);
     if (!config.ok) throw new Error("invalid config");
-    const issued = await issueSession(db, alice.id, "password", T0);
+    const issued = await issueSession(db, alice.id, testConfig(), T0);
     const results = await Promise.all([
       rotateSession(db, config.config, issued.refreshToken, T0 + 1),
       rotateSession(db, config.config, issued.refreshToken, T0 + 1),
@@ -179,7 +188,7 @@ describe("auth mode switch", () => {
   });
 
   it("revokes oidc sessions after switching to password", async () => {
-    const issued = await issueSession(db, alice.id, "oidc", T0);
+    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
     const res = await refresh({ "__Host-testapp_rt": issued.refreshToken });
     expect(res.status).toBe(401);
     const rows = await familyRows(issued.refreshToken);
@@ -187,7 +196,7 @@ describe("auth mode switch", () => {
   });
 
   it("revokes oidc sessions of users removed from the allowlist", async () => {
-    const issued = await issueSession(db, alice.id, "oidc", T0);
+    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
     const res = await refresh(
       { "__Host-testapp_rt": issued.refreshToken },
       { url: `${OIDC_ORIGIN}/auth/refresh`, env: { ...(oidcEnv as Record<string, string>), ALLOWED_EMAILS: "other.com" } },
@@ -198,7 +207,7 @@ describe("auth mode switch", () => {
   });
 
   it("revokes oidc sessions when ALLOWED_EMAILS becomes empty", async () => {
-    const issued = await issueSession(db, alice.id, "oidc", T0);
+    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
     const url = `${OIDC_ORIGIN}/auth/refresh`;
     // Allowed by the default allowlist of the tests.
     const allowed = await refresh({ "__Host-testapp_rt": issued.refreshToken }, { url, env: oidcEnv as Record<string, string> });
@@ -213,7 +222,7 @@ describe("auth mode switch", () => {
   });
 
   it("uses a 24 hour absolute expiry for oidc sessions", async () => {
-    const issued = await issueSession(db, alice.id, "oidc", T0);
+    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
     expect(issued.familyExpiresAt).toBe(T0 + DAY);
   });
 });
@@ -289,5 +298,178 @@ describe("GET /auth/login", () => {
     const res = await send("/auth/login", { cookies: { "__Host-testapp_rt": "unknown" } });
     expect(res.status).toBe(200);
     expectCleared(res);
+  });
+});
+
+describe("session lifetime settings", () => {
+  const HOUR = 60 * 60 * 1000;
+  const IDLE_2H = { SESSION_IDLE_TIMEOUT_HOURS: "2" };
+
+  async function loginWith(envOverrides: Record<string, string>): Promise<Response> {
+    const res = await send("/auth/login", {
+      form: { email: alice.email, password: PASSWORD, next: "/" },
+      env: envOverrides,
+    });
+    expect(res.status).toBe(303);
+    return res;
+  }
+
+  it("uses SESSION_MAX_AGE_HOURS for the absolute expiry and the cookie Max-Age", async () => {
+    const res = await loginWith({ SESSION_MAX_AGE_HOURS: "48" });
+    expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe((48 * HOUR) / 1000);
+    const rows = await familyRows(sessionCookies(res)["__Host-testapp_rt"]);
+    expect(rows[0]?.familyExpiresAt).toBe(T0 + 48 * HOUR);
+  });
+
+  it("accepts SESSION_MAX_AGE_HOURS=9600 and sets the largest Max-Age", async () => {
+    const res = await loginWith({ SESSION_MAX_AGE_HOURS: "9600" });
+    expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe(34_560_000);
+  });
+
+  it("sets the refresh cookie Max-Age to the idle timeout on sign-in", async () => {
+    const res = await loginWith(IDLE_2H);
+    expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe((2 * HOUR) / 1000);
+    const rows = await familyRows(sessionCookies(res)["__Host-testapp_rt"]);
+    expect(rows[0]?.familyExpiresAt).toBe(T0 + 30 * DAY);
+  });
+
+  it("extends the session past the first idle deadline while it is refreshed", async () => {
+    let cookies = sessionCookies(await loginWith(IDLE_2H));
+    for (const at of [1.5, 3, 4.5]) {
+      setNow(T0 + at * HOUR);
+      const res = await refresh(cookies, { env: IDLE_2H });
+      expect(res.status).toBe(204);
+      expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe((2 * HOUR) / 1000);
+      cookies = sessionCookies(res);
+    }
+    const rows = await familyRows(cookies["__Host-testapp_rt"]);
+    expect(rows.every((r) => r.familyExpiresAt === T0 + 30 * DAY)).toBe(true);
+  });
+
+  it("expires exactly at the idle timeout without revoking the family", async () => {
+    const cookies = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 2 * HOUR);
+    const res = await refresh(cookies, { env: IDLE_2H });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: { code: "invalid_refresh_token", message: expect.any(String) } });
+    expectCleared(res);
+    const rows = await familyRows(cookies["__Host-testapp_rt"]);
+    expect(rows.every((r) => r.revokedAt === null)).toBe(true);
+  });
+
+  it("refreshes just before the idle timeout", async () => {
+    const cookies = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 2 * HOUR - 1);
+    expect((await refresh(cookies, { env: IDLE_2H })).status).toBe(204);
+  });
+
+  it("caps the idle deadline at the absolute expiry", async () => {
+    const lifetime = { SESSION_MAX_AGE_HOURS: "3", ...IDLE_2H };
+    let cookies = sessionCookies(await loginWith(lifetime));
+    setNow(T0 + 1.5 * HOUR);
+    const res = await refresh(cookies, { env: lifetime });
+    expect(res.status).toBe(204);
+    expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe(Math.floor((1.5 * HOUR) / 1000));
+    cookies = sessionCookies(res);
+
+    setNow(T0 + 3 * HOUR);
+    const expired = await refresh(cookies, { env: lifetime });
+    expect(expired.status).toBe(401);
+    expectCleared(expired);
+  });
+
+  it("does not clear cookies or revoke when a rotated token is reused within 10 seconds after the idle timeout", async () => {
+    const first = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 2 * HOUR - 1000);
+    const secondRes = await refresh(first, { env: IDLE_2H });
+    expect(secondRes.status).toBe(204);
+    const second = sessionCookies(secondRes);
+
+    setNow(T0 + 2 * HOUR + 5000);
+    const res = await refresh(first, { env: IDLE_2H });
+    expect(res.status).toBe(401);
+    expect(res.headers.getSetCookie()).toHaveLength(0);
+    const rows = await familyRows(second["__Host-testapp_rt"]);
+    expect(rows.every((r) => r.revokedAt === null)).toBe(true);
+    expect((await refresh(second, { env: IDLE_2H })).status).toBe(204);
+  });
+
+  it("revokes the family when a rotated token is reused after the idle timeout", async () => {
+    const first = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + HOUR);
+    const second = sessionCookies(await refresh(first, { env: IDLE_2H }));
+
+    setNow(T0 + 3 * HOUR);
+    const res = await refresh(first, { env: IDLE_2H });
+    expect(res.status).toBe(401);
+    expectCleared(res);
+    const rows = await familyRows(second["__Host-testapp_rt"]);
+    expect(rows.every((r) => r.revokedAt !== null)).toBe(true);
+  });
+
+  it("applies a shorter idle timeout to existing sessions", async () => {
+    const cookies = await login(alice.email);
+    setNow(T0 + 3 * HOUR);
+    const res = await refresh(cookies, { env: IDLE_2H });
+    expect(res.status).toBe(401);
+    expectCleared(res);
+  });
+
+  it("revives a session that passed the idle timeout when the timeout is extended", async () => {
+    const cookies = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 3 * HOUR);
+    expect((await refresh(cookies, { env: IDLE_2H })).status).toBe(401);
+    expect((await refresh(cookies, { env: { SESSION_IDLE_TIMEOUT_HOURS: "4" } })).status).toBe(204);
+  });
+
+  it("clears cookies and shows the form on GET /auth/login after the idle timeout", async () => {
+    const cookies = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 2 * HOUR);
+    const res = await send("/auth/login", { cookies, env: IDLE_2H });
+    expect(res.status).toBe(200);
+    expectCleared(res);
+    expect(await res.text()).toContain('name="password"');
+  });
+
+  it("sets the refresh cookie Max-Age from the idle timeout after a password change", async () => {
+    const cookies = sessionCookies(await loginWith(IDLE_2H));
+    setNow(T0 + 10 * 60 * 1000);
+    const res = await send("/api/v1/me/password", {
+      cookies,
+      env: IDLE_2H,
+      json: { current_password: PASSWORD, new_password: "another long passphrase" },
+    });
+    expect(res.status).toBe(204);
+    expect(setCookies(res)["__Host-testapp_rt"]?.maxAge).toBe((2 * HOUR) / 1000);
+  });
+
+  it("rejects an access token whose session passed the idle timeout", async () => {
+    setNow(T0 - 2 * HOUR);
+    const cookies = await login(alice.email);
+    const [row] = await familyRows(cookies["__Host-testapp_rt"]);
+    if (!row) throw new Error("missing session");
+    setNow(T0);
+    const at = await core.signAccessToken({ sub: alice.id, sid: row.id }, env.JWT_SECRET ?? "", T0);
+    const accessOnly = { "__Host-testapp_at": at };
+    expect((await send("/api/v1/me", { cookies: accessOnly })).status).toBe(200);
+    expect((await send("/api/v1/me", { cookies: accessOnly, env: { SESSION_IDLE_TIMEOUT_HOURS: "1" } })).status).toBe(401);
+  });
+});
+
+describe("sessionExpiresAt", () => {
+  const HOUR = 60 * 60 * 1000;
+  const row = { familyExpiresAt: T0 + 30 * DAY, createdAt: T0 };
+
+  it("is the absolute expiry without an idle timeout", () => {
+    expect(sessionExpiresAt(row, { maxAgeMs: 30 * DAY, idleTimeoutMs: null })).toBe(T0 + 30 * DAY);
+  });
+
+  it("is the idle deadline when it comes first", () => {
+    expect(sessionExpiresAt(row, { maxAgeMs: 30 * DAY, idleTimeoutMs: 2 * HOUR })).toBe(T0 + 2 * HOUR);
+  });
+
+  it("is the absolute expiry when it comes first", () => {
+    const late = { familyExpiresAt: T0 + 30 * DAY, createdAt: T0 + 30 * DAY - HOUR };
+    expect(sessionExpiresAt(late, { maxAgeMs: 30 * DAY, idleTimeoutMs: 2 * HOUR })).toBe(T0 + 30 * DAY);
   });
 });

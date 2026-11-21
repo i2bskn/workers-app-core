@@ -52,7 +52,7 @@ export function createMeRoutes({ names, middleware, hooks }: MeRoutesDeps) {
       const passwordHash = await hashPassword(input.new_password);
       // Taken after hashing, right before the batch, so that mcp_revoked_at covers the grants authorized meanwhile.
       const now = clock.now();
-      const { session, insert } = await prepareNewSession(db, user.id, "password", now);
+      const { session, insert } = await prepareNewSession(db, user.id, config, now);
       const extra = hooks.credentialsRevokedStatements?.({ db, userId: user.id, now, reason: "self_change" }) ?? [];
       // mcp_revoked_at rejects at /mcp the tokens authorized until now, including grants that revokeAllGrants
       // missed because the KV listing lags behind. Order matters: revoke existing sessions before inserting the

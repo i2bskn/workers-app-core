@@ -28,11 +28,11 @@ export function getRefreshCookie(names: BrandNames, c: AnyContext): string | und
 export function setSessionCookies(
   names: BrandNames,
   c: AnyContext,
-  tokens: { accessToken: string; refreshToken: string; familyExpiresAt: number },
+  tokens: { accessToken: string; refreshToken: string; expiresAt: number },
   now: number,
 ): void {
   setCookie(c, names.accessCookie, tokens.accessToken, { ...baseOptions, maxAge: ACCESS_TOKEN_TTL_SECONDS });
-  const refreshMaxAge = Math.max(0, Math.floor((tokens.familyExpiresAt - now) / 1000));
+  const refreshMaxAge = Math.max(0, Math.floor((tokens.expiresAt - now) / 1000));
   setCookie(c, names.refreshCookie, tokens.refreshToken, { ...baseOptions, maxAge: refreshMaxAge });
 }
 
@@ -48,7 +48,7 @@ export async function setCookiesForSession(
   setSessionCookies(
     names,
     c,
-    { accessToken, refreshToken: session.refreshToken, familyExpiresAt: session.familyExpiresAt },
+    { accessToken, refreshToken: session.refreshToken, expiresAt: session.expiresAt },
     now,
   );
 }

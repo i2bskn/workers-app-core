@@ -17,6 +17,8 @@ export type CoreBindings = {
   OIDC_CLIENT_SECRET?: string;
   ALLOWED_EMAILS?: string;
   OIDC_REQUIRE_EMAIL_VERIFIED?: string;
+  SESSION_MAX_AGE_HOURS?: string;
+  SESSION_IDLE_TIMEOUT_HOURS?: string;
 };
 
 export type AuthMode = "oidc" | "password";
@@ -30,10 +32,15 @@ export type OidcConfig = {
   requireEmailVerified: boolean;
 };
 
+// The lifetime of web sessions. maxAgeMs is the absolute expiry from the sign-in; idleTimeoutMs, when set, is the
+// limit from the last refresh.
+export type SessionConfig = { maxAgeMs: number; idleTimeoutMs: number | null };
+
 export type Config = {
   authMode: AuthMode;
   jwtSecret: string;
   oidc: OidcConfig | null;
+  session: SessionConfig;
 };
 
 // The variables set by the package's middleware. user and sessionId are set by requireUser.
@@ -52,6 +59,13 @@ export type AppEnv<AppBindings extends CoreBindings = CoreBindings, AppVariables
 
 const DEFAULT_AUTH_MODE: AuthMode = "password";
 const MIN_JWT_SECRET_LENGTH = 32;
+const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_SESSION_MAX_AGE_HOURS: Record<AuthMode, number> = {
+  password: 720,
+  oidc: 24,
+};
+// 400 days: hono's setCookie throws for a Max-Age above 34,560,000 seconds.
+const MAX_SESSION_HOURS = 9600;
 
 export type ConfigResult = { ok: true; config: Config } | { ok: false; invalid: string[] };
 
@@ -96,10 +110,20 @@ export function loadConfig(env: CoreBindings): ConfigResult {
     }
   }
 
-  if (invalid.length > 0) {
+  const maxAgeHours = parseSessionHours(env.SESSION_MAX_AGE_HOURS);
+  if (maxAgeHours === null) invalid.push("SESSION_MAX_AGE_HOURS");
+  const idleTimeoutHours = parseSessionHours(env.SESSION_IDLE_TIMEOUT_HOURS);
+  if (idleTimeoutHours === null) invalid.push("SESSION_IDLE_TIMEOUT_HOURS");
+
+  if (invalid.length > 0 || maxAgeHours === null || idleTimeoutHours === null) {
     return { ok: false, invalid };
   }
-  return { ok: true, config: { authMode: mode as AuthMode, jwtSecret, oidc } };
+  const authMode = mode as AuthMode;
+  const session: SessionConfig = {
+    maxAgeMs: (maxAgeHours === undefined ? DEFAULT_SESSION_MAX_AGE_HOURS[authMode] : maxAgeHours) * HOUR_MS,
+    idleTimeoutMs: idleTimeoutHours === undefined ? null : idleTimeoutHours * HOUR_MS,
+  };
+  return { ok: true, config: { authMode, jwtSecret, oidc, session } };
 }
 
 // Unset, "" and "true" require email_verified. Only the exact string "false" relaxes it.
@@ -110,6 +134,16 @@ function parseRequireEmailVerified(value: unknown): boolean | null {
   if (value === "" || value === "true") return true;
   if (value === "false") return false;
   return null;
+}
+
+// Unset and "" mean the default (undefined). A whole number of hours from 1 to MAX_SESSION_HOURS, written without
+// signs, leading zeros or spaces, is accepted. Any other value (including non-string values from JSON variables) is
+// a configuration error (null).
+function parseSessionHours(value: unknown): number | undefined | null {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return null;
+  const hours = Number(value);
+  return hours <= MAX_SESSION_HOURS ? hours : null;
 }
 
 function parseAppOrigin(value: string | undefined): string | null {

@@ -1,6 +1,6 @@
 import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import type { CoreBindings } from "../src/config.js";
+import { loadConfig, type Config, type CoreBindings } from "../src/config.js";
 import { createTestHelpers, type RequestOptions as BaseRequestOptions, type SessionCookies as BaseSessionCookies } from "../src/testing/index.js";
 import worker, { BRAND_ID, reset } from "./fixture/src/index.js";
 
@@ -56,6 +56,13 @@ export const oidcEnv: Partial<CoreBindings> = {
   OIDC_CLIENT_SECRET: "client-secret",
   ALLOWED_EMAILS: OIDC_ALLOWED_EMAILS,
 };
+
+// The configuration of the test environment with some variables replaced, e.g. testConfig(oidcEnv).
+export function testConfig(overrides: Partial<CoreBindings> = {}): Config {
+  const result = loadConfig({ ...env, ...overrides });
+  if (!result.ok) throw new Error(`invalid test configuration: ${result.invalid.join(", ")}`);
+  return result.config;
+}
 
 export async function countNotes(userId?: string): Promise<number> {
   const row =

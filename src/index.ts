@@ -9,6 +9,7 @@ export {
   type CoreBindings,
   type CoreVariables,
   type OidcConfig,
+  type SessionConfig,
 } from "./config.js";
 export { clock } from "./clock.js";
 export { createDb, type Db } from "./db/client.js";

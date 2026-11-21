@@ -131,8 +131,8 @@ export function createCore<
       secret: string,
       now: number,
     ): Promise<void> => setCookiesForSession(names, c, session, secret, now),
-    issueSession: (db: Db, userId: string, mode: AuthMode, now: number): Promise<NewSession> =>
-      issueSession(db, userId, mode, now),
+    issueSession: (db: Db, userId: string, config: Config, now: number): Promise<NewSession> =>
+      issueSession(db, userId, config, now),
     revokeAllGrants: (oauth: OAuthHelpers, userId: string): Promise<void> => revokeAllGrants(oauth, userId),
     buildOAuthProviderOptions: buildOptions,
     // The handler OAuthProvider calls for /mcp, for tests that call it with a prepared context.

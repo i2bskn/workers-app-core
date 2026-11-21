@@ -8,6 +8,7 @@ import { loadConfig, type AppEnv, type AuthMode } from "../config.js";
 import { createDb } from "../db/client.js";
 import { sessions, users, type UserRow } from "../db/schema.js";
 import { getAccessCookie } from "./cookies.js";
+import { sessionExpiresAt } from "./sessions.js";
 import { verifyAccessToken } from "./tokens.js";
 
 // The environment the package's own routes and middleware are written against.
@@ -123,11 +124,12 @@ export function createMiddleware({ names, ErrorPage }: MiddlewareDeps) {
     const token = getAccessCookie(names, c);
     if (!token) return null;
     const now = clock.now();
-    const claims = await verifyAccessToken(names, token, c.get("config").jwtSecret, now);
+    const config = c.get("config");
+    const claims = await verifyAccessToken(names, token, config.jwtSecret, now);
     if (!claims) return null;
     const db = c.get("db");
     const session = await db.select().from(sessions).where(eq(sessions.id, claims.sid)).get();
-    if (!session || session.userId !== claims.sub || session.revokedAt !== null || session.familyExpiresAt <= now) {
+    if (!session || session.userId !== claims.sub || session.revokedAt !== null || sessionExpiresAt(session, config.session) <= now) {
       return null;
     }
     const user = await db.select().from(users).where(eq(users.id, claims.sub)).get();

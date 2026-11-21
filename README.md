@@ -133,6 +133,18 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 `middleware.*`, `getCurrentUser`, `signAccessToken`, `verifyAccessToken`, `setCookiesForSession`, `issueSession`,
 `revokeAllGrants`, `buildOAuthProviderOptions(origin, app)`, `mcpHandler`, `ErrorPage` and `fetch(app)`.
 
+`issueSession(db, userId, config, now)` takes the `Config` (`c.var.config`) and creates a session of
+`config.authMode`, with the lifetime of `config.session`. `setCookiesForSession(c, session, secret, now)` sets the
+Max-Age of the refresh cookie from `session.expiresAt`.
+
+Breaking changes in 0.2.0:
+
+- `issueSession` takes a `Config` instead of an `AuthMode`; it can no longer create a session of another mode than
+  the configuration.
+- `Config` has a required `session: SessionConfig` (`{ maxAgeMs, idleTimeoutMs }`).
+- `NewSession` has a required `expiresAt`, and `setCookiesForSession` computes the Max-Age of the refresh cookie from
+  it instead of `familyExpiresAt`.
+
 ## Hooks
 
 Every hook is optional; without hooks only the package's own statements run.
@@ -212,6 +224,12 @@ Variables and secrets:
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | oidc |
 | `ALLOWED_EMAILS` | oidc: comma separated emails or domains |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` |
+| `SESSION_MAX_AGE_HOURS` | absolute lifetime of web sessions from the sign-in, in hours (default 720 in password mode, 24 in oidc mode) |
+| `SESSION_IDLE_TIMEOUT_HOURS` | lifetime of web sessions from the last refresh, in hours (default: none) |
+
+`SESSION_MAX_AGE_HOURS` and `SESSION_IDLE_TIMEOUT_HOURS` are whole numbers from 1 to 9600 (400 days), written as
+strings (`"168"`, not `168`, in `vars`); any other value is a configuration error. An idle timeout longer than the
+max age is accepted and has no effect.
 
 An invalid configuration answers every request with 500 without details, and logs the names of the invalid items.
 
@@ -235,9 +253,19 @@ An invalid configuration answers every request with 500 without details, and log
 - Cookies: `__Host-<id>_at` (access token, 15 minutes), `__Host-<id>_rt` (refresh token) and `__Host-<id>_oidc`
   (OIDC state, 10 minutes), all `HttpOnly; Secure; SameSite=Lax; Path=/`. Access tokens are HS256 JWTs with `iss`
   `<id>` and `aud` `<id>-web`; the OIDC state has `aud` `<id>-oidc`.
-- Web sessions last 30 days in password mode and 24 hours in oidc mode, from the sign-in; refreshing rotates the
-  refresh token without extending that. Reusing a rotated refresh token more than 10 seconds later revokes the whole
-  session family. Switching `AUTH_MODE` revokes the sessions of the other mode on their next refresh.
+- Web sessions last `SESSION_MAX_AGE_HOURS` from the sign-in (by default 30 days in password mode and 24 hours in
+  oidc mode); refreshing rotates the refresh token without extending that. With `SESSION_IDLE_TIMEOUT_HOURS`, a
+  session also expires when it has not been refreshed for that long, and each refresh extends it up to the earlier of
+  the max age and the refresh time plus the idle timeout. The refresh cookie's Max-Age follows that expiry. Expiring
+  by the idle timeout does not revoke the session family. Reusing a rotated refresh token more than 10 seconds later
+  revokes the whole session family. Switching `AUTH_MODE` revokes the sessions of the other mode on their next refresh.
+- The max age of a session is fixed at the sign-in: changing `SESSION_MAX_AGE_HOURS` applies from the next sign-in.
+  The idle timeout is computed with the current setting: shortening it applies to existing sessions at once, and
+  lengthening or removing it makes sessions that had passed it valid again if they are within their max age (only a
+  copy of the token can use them, since browsers drop the cookie at its Max-Age).
+- The idle timeout counts from the last refresh. Clients refresh when the access token (15 minutes) has expired and a
+  request gets 401, so the inactivity actually allowed is between about the idle timeout minus 15 minutes and the
+  idle timeout.
 - MCP access tokens last 12 hours, refresh tokens 30 days in both modes.
 - `ALLOWED_EMAILS`: an entry that is exactly `*` allows everyone; an empty list allows no one. Other entries match
   the whole email when they contain `@`, otherwise the domain exactly (subdomains do not match). Existing oidc

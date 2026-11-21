@@ -26,6 +26,7 @@ import {
   resetDb,
   send,
   setCookies,
+  testConfig,
   type RequestOptions,
 } from "./helpers.js";
 
@@ -172,7 +173,7 @@ async function expectMcpOk(res: Response): Promise<void> {
 
 async function oidcSessionCookies(user: UserRow): Promise<Cookies> {
   const now = Date.now();
-  const session = await issueSession(db, user.id, "oidc", now);
+  const session = await issueSession(db, user.id, testConfig(oidcEnv), now);
   const at = await core.signAccessToken({ sub: user.id, sid: session.sessionId }, env.JWT_SECRET ?? "", now);
   return { "__Host-testapp_at": at, "__Host-testapp_rt": session.refreshToken };
 }

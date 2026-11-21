@@ -120,7 +120,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
 
     const now = clock.now();
     await beforeSessionIssued(c, user.id, now);
-    const session = await issueSession(db, user.id, "password", now);
+    const session = await issueSession(db, user.id, config, now);
     await setCookiesForSession(names, c, session, config.jwtSecret, now);
     return c.redirect(next, 303);
   });
@@ -160,7 +160,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     );
     if (!user) return c.html(<ErrorPage Layout={Layout} message="すでに初期設定が完了しています" />, 409);
 
-    const session = await issueSession(db, user.id, "password", now);
+    const session = await issueSession(db, user.id, config, now);
     await setCookiesForSession(names, c, session, config.jwtSecret, now);
     return c.redirect("/", 303);
   });
@@ -236,7 +236,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
 
     await beforeSessionIssued(c, resolved.user.id, now);
-    const session = await issueSession(db, resolved.user.id, "oidc", now);
+    const session = await issueSession(db, resolved.user.id, config, now);
     await setCookiesForSession(names, c, session, config.jwtSecret, now);
     return c.redirect(safeNext(state.next, oidc.appOrigin), 303);
   });
