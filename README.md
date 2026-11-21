@@ -138,6 +138,12 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 Max-Age of the refresh cookie from `session.expiresAt`. Use `core.issueSession` only in trusted server code after
 the caller has authenticated the user and completed any required MFA. For browser sign-in, use the core auth routes.
 
+Breaking changes in 0.3.0:
+
+- Password sign-in reads the MFA tables, even under the default `optional` policy. Before deploying, re-export the
+  core tables (`export * from "@i2bskn/workers-app-core/schema"`), run `drizzle-kit generate`, and apply the
+  migration to D1.
+
 Breaking changes in 0.2.0:
 
 - `issueSession` takes a `Config` instead of an `AuthMode`; it can no longer create a session of another mode than
