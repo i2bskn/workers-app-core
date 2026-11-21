@@ -2,7 +2,6 @@ import { sign, verify } from "hono/jwt";
 import * as client from "openid-client";
 import type { BrandNames } from "../brand.js";
 import type { OidcConfig } from "../config.js";
-import { isEmailAllowed, parseAllowlist } from "./allowlist.js";
 import { OIDC_COOKIE_TTL_SECONDS } from "./cookies.js";
 import { normalizeEmail, normalizeName } from "./validate.js";
 
@@ -155,17 +154,17 @@ export function isEmailVerified(claims: Record<string, unknown>, requireEmailVer
 
 export type ClaimsResult =
   | { ok: true; email: string; name: string | null }
-  | { ok: false; reason: "invalid_email" | "email_not_verified" | "not_allowed" };
+  | { ok: false; reason: "invalid_email" | "email_not_verified" };
 
-// Spec 6.4 steps 4-7. The email comes from the ID token only.
+// Spec 6.4 steps 4-7. The email comes from the ID token only. Who may sign in is decided by the users table (see
+// resolveOidcUser), not here.
 export function evaluateIdTokenClaims(
   claims: Record<string, unknown>,
-  options: Pick<OidcConfig, "allowedEmails" | "requireEmailVerified">,
+  options: Pick<OidcConfig, "requireEmailVerified">,
 ): ClaimsResult {
   const email = normalizeEmail(claims.email);
   if (email === null) return { ok: false, reason: "invalid_email" };
   if (!isEmailVerified(claims, options.requireEmailVerified)) return { ok: false, reason: "email_not_verified" };
-  if (!isEmailAllowed(email, parseAllowlist(options.allowedEmails))) return { ok: false, reason: "not_allowed" };
   const name = normalizeName(claims.name);
   return { ok: true, email, name: name.ok ? name.value : null };
 }

@@ -1,49 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { isEmailAllowed, parseAllowlist } from "../src/auth/allowlist.js";
 import { safeNext } from "../src/auth/redirect.js";
 import { isRole, isValidPassword, normalizeEmail, normalizeName } from "../src/auth/validate.js";
 import { ORIGIN, send } from "./helpers.js";
-
-describe("allowlist", () => {
-  const allowed = (email: string, list: string) => isEmailAllowed(email, parseAllowlist(list));
-
-  it("allows no one when empty", () => {
-    expect(allowed("a@example.com", "")).toBe(false);
-    expect(allowed("a@example.com", " , ,")).toBe(false);
-  });
-
-  it("allows everyone with a * entry", () => {
-    expect(allowed("a@example.com", "*")).toBe(true);
-    expect(allowed("a@other.com", " * ")).toBe(true);
-    expect(allowed("a@other.com", "*,example.com")).toBe(true);
-    expect(allowed("a@other.com", "example.com, *")).toBe(true);
-  });
-
-  it("does not treat * inside an entry as a wildcard", () => {
-    expect(allowed("a@example.com", "*@example.com")).toBe(false);
-    expect(allowed("a@example.com", "*.com")).toBe(false);
-  });
-
-  it("matches domains exactly", () => {
-    expect(allowed("a@example.com", "example.com")).toBe(true);
-    expect(allowed("a@other.com", "example.com")).toBe(false);
-  });
-
-  it("does not match subdomains", () => {
-    expect(allowed("a@sub.example.com", "example.com")).toBe(false);
-    expect(allowed("a@evilexample.com", "example.com")).toBe(false);
-  });
-
-  it("matches email addresses exactly", () => {
-    expect(allowed("alice@example.org", "example.com, alice@example.org")).toBe(true);
-    expect(allowed("bob@example.org", "example.com, alice@example.org")).toBe(false);
-  });
-
-  it("ignores case and surrounding whitespace", () => {
-    expect(allowed("alice@example.org", "  ALICE@Example.ORG ")).toBe(true);
-    expect(allowed("bob@example.com", " Example.COM ")).toBe(true);
-  });
-});
 
 describe("safeNext", () => {
   it("keeps same-origin paths", () => {

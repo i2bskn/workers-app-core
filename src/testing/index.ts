@@ -155,11 +155,13 @@ export function createTestHelpers<TestEnv extends CoreBindings, Id extends strin
     return sessionCookies(res);
   }
 
-  // Deletes every row: first the app tables, in the order given (children first), then sessions and users.
+  // Deletes every row: first the app tables, in the order given (children first), then sessions, user_invitations
+  // and users.
   async function resetDb(appTables: string[] = []): Promise<void> {
     await env.DB.batch([
       ...appTables.map((table) => env.DB.prepare(`DELETE FROM ${table}`)),
       env.DB.prepare("DELETE FROM sessions"),
+      env.DB.prepare("DELETE FROM user_invitations"),
       env.DB.prepare("DELETE FROM users"),
     ]);
   }

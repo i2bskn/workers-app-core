@@ -12,11 +12,11 @@ import {
   setOidcCookie,
   setSessionCookies,
 } from "../auth/cookies.js";
-import { parseAllowlist } from "../auth/allowlist.js";
+import { acceptInvitation, findValidInvitation } from "../auth/invitations.js";
 import { apiError, describeError, type CoreEnv, type CoreMiddleware } from "../auth/middleware.js";
 import { evaluateIdTokenClaims, exchangeCode, startOidcLogin, verifyOidcState } from "../auth/oidc.js";
 import { hashPassword, verifyDummyPassword, verifyPassword } from "../auth/password.js";
-import { issuePasswordOnlySession } from "../auth/mfa-store.js";
+import { getMfaLoginState, issuePasswordOnlySession } from "../auth/mfa-store.js";
 import { safeNext } from "../auth/redirect.js";
 import {
   findSessionById,
@@ -27,10 +27,11 @@ import {
   rotateSession,
 } from "../auth/sessions.js";
 import { hashToken, signAccessToken, verifyAccessToken } from "../auth/tokens.js";
-import { countUsers, createInitialAdmin, findUserByEmail, resolveOidcUser } from "../auth/users.js";
+import { countUsers, createInitialAdmin, findUserByEmail, findUserById, resolveOidcUser } from "../auth/users.js";
 import { isValidPassword, normalizeEmail, normalizeName } from "../auth/validate.js";
 import type { CoreHooks } from "../hooks.js";
 import { ErrorPage } from "../views/error.js";
+import { InvitePage } from "../views/invite.js";
 import { LoggedOutPage } from "../views/logged-out.js";
 import { LoginPage } from "../views/login.js";
 import { SetupPage } from "../views/setup.js";
@@ -197,6 +198,63 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     return passwordOnly(c, user, true, "/");
   });
 
+  // Invitation links of password mode. The token is in the URL, so the pages are not cached and send no Referer.
+  const invalidInvitation = "招待リンクが無効か、有効期限が切れています。管理者に再発行を依頼してください。";
+  auth.use("/invite", requireMode("password"), async (c, next) => {
+    c.header("Cache-Control", "no-store");
+    c.header("Referrer-Policy", "no-referrer");
+    await next();
+  });
+
+  // HEAD and prefetches get no page; GET never consumes the token.
+  auth.get("/invite", async (c) => {
+    if (c.req.method === "HEAD" || isPrefetch(c)) return c.body(null, 204);
+    const token = c.req.query("token") ?? "";
+    const invitation = await findValidInvitation(c.get("db"), token, clock.now());
+    if (!invitation) return c.html(<ErrorPage Layout={Layout} message={invalidInvitation} />, 400);
+    return c.html(<InvitePage Layout={Layout} token={token} email={invitation.email} />);
+  });
+
+  auth.post("/invite", async (c) => {
+    const db = c.get("db");
+    const body = await c.req.parseBody();
+    const token = formString(body.token);
+    const password = formString(body.password);
+    const passwordConfirm = formString(body.password_confirm);
+
+    const invitation = await findValidInvitation(db, token, clock.now());
+    if (!invitation) return c.html(<ErrorPage Layout={Layout} message={invalidInvitation} />, 400);
+
+    const errors: string[] = [];
+    if (!isValidPassword(password)) errors.push("パスワードは 12 文字以上 256 文字以下にしてください");
+    if (password !== passwordConfirm) errors.push("パスワードと確認用のパスワードが一致しません");
+    if (errors.length > 0) {
+      return c.html(<InvitePage Layout={Layout} token={token} email={invitation.email} errors={errors} />, 400);
+    }
+
+    const state = await getMfaLoginState(db.$client, invitation.userId, c.get("config").passwordMfa.policy);
+    if (!state) return c.html(<ErrorPage Layout={Layout} message={invalidInvitation} />, 400);
+    if (state.required && !mfa.hasMethods(c)) {
+      return c.html(<ErrorPage Layout={Layout} message="このURLで利用できる認証方法がありません。管理者に連絡してください。" />, 503);
+    }
+
+    const passwordHash = await hashPassword(password);
+    const accepted = await acceptInvitation(db.$client, {
+      userId: invitation.userId,
+      tokenHash: invitation.tokenHash,
+      passwordHash,
+      now: clock.now(),
+    });
+    if (!accepted) return c.html(<ErrorPage Layout={Layout} message={invalidInvitation} />, 400);
+
+    // Sign in like a password login: MFA enrollment first when it is required.
+    const user = await findUserById(db, invitation.userId);
+    if (!user) return c.html(<ErrorPage Layout={Layout} message={invalidInvitation} />, 400);
+    const challenge = await mfa.start(c, user, "/", undefined, false);
+    if (challenge) return challenge;
+    return passwordOnly(c, user, false, "/");
+  });
+
   auth.get("/oidc/callback", requireMode("oidc"), async (c) => {
     const config = c.get("config");
     const oidc = config.oidc;
@@ -234,12 +292,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
 
     const evaluated = evaluateIdTokenClaims(claims, oidc);
     if (!evaluated.ok) {
-      // An empty ALLOWED_EMAILS rejects everyone. Logged with its own reason so that the misconfiguration is
-      // visible; the response is the same as for an email that is not allowed.
-      const reason =
-        evaluated.reason === "not_allowed" && parseAllowlist(oidc.allowedEmails).length === 0
-          ? "allowlist_empty"
-          : evaluated.reason;
+      const { reason } = evaluated;
       // Log only the type of email_verified to tell a missing claim from false. Never log claim values.
       console.warn(
         "oidc login rejected",
@@ -257,12 +310,23 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
       db,
       { issuer: iss, subject: sub, email: evaluated.email, name: evaluated.name },
       now,
-      hooks.userCreatedStatements,
-      beforeWrite
-        ? (operation) => beforeWrite({ operation, env: c.env, db, issuer: iss, subject: sub, email: evaluated.email, claims })
-        : undefined,
+      {
+        initialAdminEmail: oidc.initialAdminEmail,
+        userCreatedStatements: hooks.userCreatedStatements,
+        allowWrite: beforeWrite
+          ? (operation) => beforeWrite({ operation, env: c.env, db, issuer: iss, subject: sub, email: evaluated.email, claims })
+          : undefined,
+      },
     );
     if (!resolved.ok) {
+      if (resolved.reason === "not_invited") {
+        // Without INITIAL_ADMIN_EMAIL, nobody can sign in to an empty deployment. Logged with its own reason so that
+        // the misconfiguration is visible; the response is the same.
+        const reason =
+          oidc.initialAdminEmail === null && (await countUsers(db)) === 0 ? "initial_admin_not_configured" : "not_invited";
+        console.warn("oidc login rejected", { reason });
+        return c.html(<ErrorPage Layout={Layout} message="このアカウントではログインできません" />, 403);
+      }
       if (resolved.reason === "conflict" || resolved.reason === "not_allowed") {
         console.warn("oidc login rejected", { reason: resolved.reason === "conflict" ? "identity_conflict" : "not_allowed" });
         return c.html(<ErrorPage Layout={Layout} message="このアカウントではログインできません" />, 403);

@@ -45,18 +45,20 @@ export async function countUsers(db: Db): Promise<number> {
   return row?.count ?? 0;
 }
 
-// Runs the INSERT of a user, followed by the statements of the userCreatedStatements hook in the same batch.
-// Without statements, the INSERT runs alone as before. Returns the number of rows the INSERT changed.
+// Runs the INSERT of a user, followed by `following` (statements of the package that must commit with the user, e.g.
+// the invitation token) and the statements of the userCreatedStatements hook, in the same batch. Without other
+// statements, the INSERT runs alone as before. Returns the number of rows the INSERT changed.
 export async function runUserInsert(
   d1: D1Database,
   insert: D1PreparedStatement,
   userId: string,
   now: number,
   userCreatedStatements: UserCreatedStatements,
+  following: D1PreparedStatement[] = [],
 ): Promise<number> {
   const extra = userCreatedStatements?.(d1, userId, now) ?? [];
-  if (extra.length === 0) return (await insert.run()).meta.changes;
-  const results = await d1.batch([insert, ...extra]);
+  if (following.length === 0 && extra.length === 0) return (await insert.run()).meta.changes;
+  const results = await d1.batch([insert, ...following, ...extra]);
   return results[0]?.meta.changes ?? 0;
 }
 
@@ -90,20 +92,28 @@ export type OidcIdentity = {
 
 type AllowOidcUserWrite = (operation: "link" | "create") => Promise<boolean>;
 
+export type ResolveOidcUserOptions = {
+  // The normalized INITIAL_ADMIN_EMAIL, or null when unset.
+  initialAdminEmail?: string | null;
+  userCreatedStatements?: UserCreatedStatements;
+  allowWrite?: AllowOidcUserWrite;
+};
+
 export type OidcUserResult =
   | { ok: true; user: UserRow }
-  | { ok: false; reason: "conflict" | "not_allowed" | "failed" };
+  | { ok: false; reason: "conflict" | "not_allowed" | "not_invited" | "failed" };
 
-// Maps an OIDC identity to a user, creating one just in time (spec 6.6).
+// Maps an OIDC identity to a user. Only users registered beforehand (invitations: users without an OIDC subject) are
+// linked on their first sign-in, and the first admin is created only for INITIAL_ADMIN_EMAIL while there are no users.
+// Anyone else is not_invited, and nothing is written.
 export async function resolveOidcUser(
   db: Db,
   identity: OidcIdentity,
   now: number,
-  userCreatedStatements?: UserCreatedStatements,
-  allowWrite?: AllowOidcUserWrite,
+  options: ResolveOidcUserOptions = {},
 ): Promise<OidcUserResult> {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const result = await tryResolveOidcUser(db, identity, now, userCreatedStatements, allowWrite);
+    const result = await tryResolveOidcUser(db, identity, now, options);
     if (result !== "retry") return result;
   }
   return { ok: false, reason: "failed" };
@@ -113,10 +123,10 @@ async function tryResolveOidcUser(
   db: Db,
   identity: OidcIdentity,
   now: number,
-  userCreatedStatements: UserCreatedStatements,
-  allowWrite?: AllowOidcUserWrite,
+  options: ResolveOidcUserOptions,
 ): Promise<OidcUserResult | "retry"> {
   const { issuer, subject, email, name } = identity;
+  const { initialAdminEmail = null, userCreatedStatements, allowWrite } = options;
 
   const linked = await db
     .select()
@@ -136,9 +146,10 @@ async function tryResolveOidcUser(
   }
 
   const byEmail = await findUserByEmail(db, email);
-  if (byEmail && byEmail.oidcSubject !== null) return { ok: false, reason: "conflict" };
-  if (allowWrite && !(await allowWrite(byEmail ? "link" : "create"))) return { ok: false, reason: "not_allowed" };
   if (byEmail) {
+    if (byEmail.oidcSubject !== null) return { ok: false, reason: "conflict" };
+    // An invitation: link the identity. The role, name and creation time stay as registered.
+    if (allowWrite && !(await allowWrite("link"))) return { ok: false, reason: "not_allowed" };
     try {
       const result = await db
         .update(users)
@@ -154,16 +165,22 @@ async function tryResolveOidcUser(
     return user ? { ok: true, user } : "retry";
   }
 
+  if (initialAdminEmail === null || email !== initialAdminEmail || (await countUsers(db)) > 0) {
+    return { ok: false, reason: "not_invited" };
+  }
+  if (allowWrite && !(await allowWrite("create"))) return { ok: false, reason: "not_allowed" };
+
   const id = crypto.randomUUID();
   const d1 = db.$client;
   try {
     const insert = d1
       .prepare(`
       INSERT INTO users (id, email, name, role, password_hash, oidc_issuer, oidc_subject, created_at, updated_at, last_login_at)
-      SELECT ?, ?, ?, CASE WHEN EXISTS (SELECT 1 FROM users) THEN 'member' ELSE 'admin' END,
-        NULL, ?, ?, ?, ?, NULL`)
+      SELECT ?, ?, ?, 'admin', NULL, ?, ?, ?, ?, NULL
+      WHERE NOT EXISTS (SELECT 1 FROM users)`)
       .bind(id, email, name, issuer, subject, now, now);
-    await runUserInsert(d1, insert, id, now, userCreatedStatements);
+    // Another user was created meanwhile: the retry finds the linked user or rejects.
+    if ((await runUserInsert(d1, insert, id, now, userCreatedStatements)) !== 1) return "retry";
   } catch (error) {
     if (!isUserUniqueViolation(error)) throw error;
     return "retry";

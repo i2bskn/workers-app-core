@@ -32,7 +32,7 @@ export type MeRoutesDeps = {
 export function createMeRoutes({ names, middleware, hooks }: MeRoutesDeps) {
   const { requireMode, requireUser } = middleware;
   return new Hono<CoreEnv>()
-    .get("/", requireUser, (c) => c.json(toApiUser(c.get("user")), 200))
+    .get("/", requireUser, (c) => c.json(toApiUser(c.get("user"), c.get("config").authMode), 200))
     .post("/password", requireMode("password"), requireUser, changeMyPasswordBody, async (c) => {
       const input = c.req.valid("json");
       const user = c.get("user");

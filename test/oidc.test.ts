@@ -9,7 +9,7 @@ import { loadConfig, type CoreBindings } from "../src/config.js";
 import {
   createUser,
   db,
-  OIDC_ALLOWED_EMAILS,
+  dbChangingBefore,
   OIDC_ORIGIN,
   oidcEnv,
   resetDb,
@@ -29,27 +29,67 @@ function identity(overrides: Partial<OidcIdentity> = {}): OidcIdentity {
 
 beforeEach(resetDb);
 
+const ADMIN_EMAIL = "alice@example.com";
+const asInitialAdmin = { initialAdminEmail: ADMIN_EMAIL };
+
 describe("resolveOidcUser", () => {
-  it("creates the first user as admin and later users as members (JIT)", async () => {
-    const first = await resolveOidcUser(db, identity(), NOW);
-    const second = await resolveOidcUser(db, identity({ subject: "sub-2", email: "bob@example.com" }), NOW);
-    expect(first).toMatchObject({ ok: true, user: { role: "admin", email: "alice@example.com", name: "Alice" } });
-    expect(second).toMatchObject({ ok: true, user: { role: "member", oidcSubject: "sub-2" } });
+  it("creates the first admin for INITIAL_ADMIN_EMAIL while there are no users", async () => {
+    const result = await resolveOidcUser(db, identity(), NOW, asInitialAdmin);
+    expect(result).toMatchObject({
+      ok: true,
+      user: { role: "admin", email: ADMIN_EMAIL, name: "Alice", oidcIssuer: ISSUER, oidcSubject: "sub-1", passwordHash: null },
+    });
+    expect(await db.select().from(users).all()).toHaveLength(1);
   });
 
-  it("creates only one admin for concurrent first logins", async () => {
+  it("rejects everyone as not_invited without INITIAL_ADMIN_EMAIL and writes nothing", async () => {
+    const allowWrite = vi.fn().mockResolvedValue(true);
+    expect(await resolveOidcUser(db, identity(), NOW, { allowWrite })).toEqual({ ok: false, reason: "not_invited" });
+    expect(await resolveOidcUser(db, identity(), NOW, { initialAdminEmail: null, allowWrite })).toEqual({
+      ok: false,
+      reason: "not_invited",
+    });
+    expect(allowWrite).not.toHaveBeenCalled();
+    expect(await db.select().from(users).all()).toHaveLength(0);
+  });
+
+  it("rejects an email other than INITIAL_ADMIN_EMAIL while there are no users", async () => {
+    const result = await resolveOidcUser(db, identity({ email: "bob@example.com" }), NOW, asInitialAdmin);
+    expect(result).toEqual({ ok: false, reason: "not_invited" });
+    expect(await db.select().from(users).all()).toHaveLength(0);
+  });
+
+  it("ignores INITIAL_ADMIN_EMAIL once a user exists", async () => {
+    await createUser({ email: "bob@example.com", role: "admin" });
+    const userCreatedStatements = vi.fn().mockReturnValue([]);
+    const result = await resolveOidcUser(db, identity(), NOW, { ...asInitialAdmin, userCreatedStatements });
+    expect(result).toEqual({ ok: false, reason: "not_invited" });
+    expect(userCreatedStatements).not.toHaveBeenCalled();
+    expect(await db.select().from(users).all()).toHaveLength(1);
+  });
+
+  it("creates one admin for concurrent first logins of the same person", async () => {
     const results = await Promise.all([
-      resolveOidcUser(db, identity(), NOW),
-      resolveOidcUser(db, identity({ subject: "sub-2", email: "bob@example.com" }), NOW),
-      resolveOidcUser(db, identity({ subject: "sub-3", email: "carol@example.com" }), NOW),
+      resolveOidcUser(db, identity(), NOW, asInitialAdmin),
+      resolveOidcUser(db, identity(), NOW, asInitialAdmin),
     ]);
-    expect(results.every((r) => r.ok)).toBe(true);
     const all = await db.select().from(users).all();
-    expect(all.filter((u) => u.role === "admin")).toHaveLength(1);
+    expect(all).toHaveLength(1);
+    expect(all[0]?.role).toBe("admin");
+    expect(results.map((r) => (r.ok ? r.user.id : r.reason))).toEqual([all[0]?.id, all[0]?.id]);
+  });
+
+  it("retries when another user is created before the INSERT of the first admin", async () => {
+    const changing = dbChangingBefore(/WHERE NOT EXISTS \(SELECT 1 FROM users\)/, () =>
+      createUser({ email: "bob@example.com", role: "admin" }),
+    );
+    expect(await resolveOidcUser(changing, identity(), NOW, asInitialAdmin)).toEqual({ ok: false, reason: "not_invited" });
+    const all = await db.select().from(users).all();
+    expect(all.map((u) => u.email)).toEqual(["bob@example.com"]);
   });
 
   it("finds a linked user by issuer and subject and updates the email", async () => {
-    const created = await resolveOidcUser(db, identity(), NOW);
+    const created = await resolveOidcUser(db, identity(), NOW, asInitialAdmin);
     const again = await resolveOidcUser(db, identity({ email: "alice@new.example.com" }), NOW + 1);
     expect(again.ok && again.user.id).toBe(created.ok && created.user.id);
     const row = await db.select().from(users).where(eq(users.oidcSubject, "sub-1")).get();
@@ -57,22 +97,37 @@ describe("resolveOidcUser", () => {
   });
 
   it("keeps the old email when the new one belongs to another user", async () => {
-    await resolveOidcUser(db, identity(), NOW);
+    await resolveOidcUser(db, identity(), NOW, asInitialAdmin);
     await createUser({ email: "taken@example.com" });
     const again = await resolveOidcUser(db, identity({ email: "taken@example.com" }), NOW + 1);
     expect(again).toMatchObject({ ok: true, user: { email: "alice@example.com", oidcSubject: "sub-1" } });
   });
 
-  it("links an existing user with the same email and no subject", async () => {
-    const existing = await createUser({ email: "alice@example.com", role: "admin" });
-    const result = await resolveOidcUser(db, identity(), NOW);
-    expect(result).toMatchObject({ ok: true, user: { id: existing.id, oidcIssuer: ISSUER, oidcSubject: "sub-1" } });
+  it("links an invited user without changing the role, name or creation time", async () => {
+    await createUser({ email: "admin@example.com", role: "admin" });
+    const invited = await createUser({ email: "alice@example.com", role: "member", password: null, createdAt: 1000 });
+    const result = await resolveOidcUser(db, identity(), NOW, asInitialAdmin);
+    expect(result).toMatchObject({
+      ok: true,
+      user: { id: invited.id, role: "member", name: null, createdAt: 1000, oidcIssuer: ISSUER, oidcSubject: "sub-1" },
+    });
+    expect(await db.select().from(users).all()).toHaveLength(2);
+  });
+
+  it("rejects a user deleted before the first sign-in", async () => {
+    await createUser({ email: "admin@example.com", role: "admin" });
+    const invited = await createUser({ email: "alice@example.com", password: null });
+    await db.delete(users).where(eq(users.id, invited.id)).run();
+    expect(await resolveOidcUser(db, identity(), NOW)).toEqual({ ok: false, reason: "not_invited" });
     expect(await db.select().from(users).all()).toHaveLength(1);
   });
 
   it("rejects an email that is linked to a different issuer or subject", async () => {
-    await resolveOidcUser(db, identity(), NOW);
-    expect(await resolveOidcUser(db, identity({ subject: "other-sub" }), NOW)).toEqual({ ok: false, reason: "conflict" });
+    await resolveOidcUser(db, identity(), NOW, asInitialAdmin);
+    expect(await resolveOidcUser(db, identity({ subject: "other-sub" }), NOW, asInitialAdmin)).toEqual({
+      ok: false,
+      reason: "conflict",
+    });
     expect(await resolveOidcUser(db, identity({ issuer: "https://other-idp.example.com" }), NOW)).toEqual({
       ok: false,
       reason: "conflict",
@@ -99,52 +154,42 @@ describe("ID token claims", () => {
     expect(isEmailVerified({ email_verified: null }, false)).toBe(false);
   });
 
-  it("evaluates email, email_verified and the allowlist", () => {
-    const opts = (allowedEmails: string) => ({ allowedEmails, requireEmailVerified: true });
+  it("evaluates email and email_verified", () => {
+    const opts = { requireEmailVerified: true };
     const base = { email: " Alice@Example.com ", email_verified: true, name: " Alice " };
-    // An empty allowlist allows no one.
-    expect(evaluateIdTokenClaims(base, opts(""))).toEqual({ ok: false, reason: "not_allowed" });
-    expect(evaluateIdTokenClaims({ ...base, name: "a".repeat(101) }, opts(""))).toEqual({ ok: false, reason: "not_allowed" });
-    const allowed = opts(OIDC_ALLOWED_EMAILS);
-    expect(evaluateIdTokenClaims(base, allowed)).toEqual({ ok: true, email: "alice@example.com", name: "Alice" });
-    expect(evaluateIdTokenClaims({ ...base, name: "a".repeat(101) }, allowed)).toMatchObject({ ok: true, name: null });
-    expect(evaluateIdTokenClaims(base, opts("*"))).toEqual({ ok: true, email: "alice@example.com", name: "Alice" });
-    expect(evaluateIdTokenClaims({ email_verified: true }, opts(""))).toEqual({ ok: false, reason: "invalid_email" });
-    expect(evaluateIdTokenClaims({ ...base, email: "bad" }, opts(""))).toEqual({ ok: false, reason: "invalid_email" });
-    expect(evaluateIdTokenClaims({ ...base, email_verified: false }, opts(""))).toEqual({
+    // Any domain passes: who may sign in is decided by the users table.
+    expect(evaluateIdTokenClaims(base, opts)).toEqual({ ok: true, email: "alice@example.com", name: "Alice" });
+    expect(evaluateIdTokenClaims({ ...base, email: "bob@outside.test" }, opts)).toMatchObject({ ok: true });
+    expect(evaluateIdTokenClaims({ ...base, name: "a".repeat(101) }, opts)).toMatchObject({ ok: true, name: null });
+    expect(evaluateIdTokenClaims({ email_verified: true }, opts)).toEqual({ ok: false, reason: "invalid_email" });
+    expect(evaluateIdTokenClaims({ ...base, email: "bad" }, opts)).toEqual({ ok: false, reason: "invalid_email" });
+    expect(evaluateIdTokenClaims({ ...base, email_verified: false }, opts)).toEqual({
       ok: false,
       reason: "email_not_verified",
     });
-    expect(evaluateIdTokenClaims({ ...base, email_verified: "true" }, opts(""))).toEqual({
+    expect(evaluateIdTokenClaims({ ...base, email_verified: "true" }, opts)).toEqual({
       ok: false,
       reason: "email_not_verified",
     });
-    expect(evaluateIdTokenClaims({ email: base.email }, opts(""))).toEqual({ ok: false, reason: "email_not_verified" });
-    expect(evaluateIdTokenClaims(base, opts("other.com"))).toEqual({ ok: false, reason: "not_allowed" });
-    expect(evaluateIdTokenClaims(base, opts("example.com"))).toMatchObject({ ok: true });
+    expect(evaluateIdTokenClaims({ email: base.email }, opts)).toEqual({ ok: false, reason: "email_not_verified" });
   });
 
   it("evaluates claims when email_verified is not required", () => {
-    const opts = (allowedEmails: string) => ({ allowedEmails, requireEmailVerified: false });
+    const opts = { requireEmailVerified: false };
     const base = { email: " Alice@Example.com ", name: " Alice " };
-    // An empty allowlist allows no one.
-    expect(evaluateIdTokenClaims(base, opts(""))).toEqual({ ok: false, reason: "not_allowed" });
-    expect(evaluateIdTokenClaims({ ...base, email_verified: true }, opts(""))).toEqual({ ok: false, reason: "not_allowed" });
-    const allowed = opts(OIDC_ALLOWED_EMAILS);
-    expect(evaluateIdTokenClaims(base, allowed)).toEqual({ ok: true, email: "alice@example.com", name: "Alice" });
-    expect(evaluateIdTokenClaims({ ...base, email_verified: true }, allowed)).toMatchObject({ ok: true });
+    expect(evaluateIdTokenClaims(base, opts)).toEqual({ ok: true, email: "alice@example.com", name: "Alice" });
+    expect(evaluateIdTokenClaims({ ...base, email_verified: true }, opts)).toMatchObject({ ok: true });
     for (const value of [false, "true", null]) {
-      expect(evaluateIdTokenClaims({ ...base, email_verified: value }, opts(""))).toEqual({
+      expect(evaluateIdTokenClaims({ ...base, email_verified: value }, opts)).toEqual({
         ok: false,
         reason: "email_not_verified",
       });
     }
-    expect(evaluateIdTokenClaims({ ...base, email: "bad" }, opts(""))).toEqual({ ok: false, reason: "invalid_email" });
-    expect(evaluateIdTokenClaims({ ...base, email: "bad", email_verified: false }, opts(""))).toEqual({
+    expect(evaluateIdTokenClaims({ ...base, email: "bad" }, opts)).toEqual({ ok: false, reason: "invalid_email" });
+    expect(evaluateIdTokenClaims({ ...base, email: "bad", email_verified: false }, opts)).toEqual({
       ok: false,
       reason: "invalid_email",
     });
-    expect(evaluateIdTokenClaims(base, opts("other.com"))).toEqual({ ok: false, reason: "not_allowed" });
   });
 });
 
@@ -175,6 +220,8 @@ describe("loadConfig OIDC_REQUIRE_EMAIL_VERIFIED", () => {
 });
 
 describe("OIDC flow with a mocked IdP", () => {
+  // The first sign-in of alice@example.com to an empty deployment creates the first admin.
+  const adminEnv: Partial<CoreBindings> = { ...oidcEnv, INITIAL_ADMIN_EMAIL: ADMIN_EMAIL };
   const KID = "test-key";
   let keyPair: CryptoKeyPair;
   let otherKeyPair: CryptoKeyPair;
@@ -251,7 +298,7 @@ describe("OIDC flow with a mocked IdP", () => {
 
   let pendingNonce = "";
 
-  async function startLogin(next = "/wiki", env: Partial<CoreBindings> = oidcEnv) {
+  async function startLogin(next = "/wiki", env: Partial<CoreBindings> = adminEnv) {
     const res = await send(`${OIDC_ORIGIN}/auth/login?next=${encodeURIComponent(next)}`, { env });
     expect(res.status).toBe(302);
     const location = new URL(res.headers.get("Location") ?? "");
@@ -261,7 +308,7 @@ describe("OIDC flow with a mocked IdP", () => {
     return { location, oidcCookie: oidcCookie?.value ?? "" };
   }
 
-  function callback(query: string, oidcCookie?: string, env: Partial<CoreBindings> = oidcEnv) {
+  function callback(query: string, oidcCookie?: string, env: Partial<CoreBindings> = adminEnv) {
     return send(`${OIDC_ORIGIN}/auth/oidc/callback?${query}`, {
       env,
       cookies: oidcCookie ? { "__Host-testapp_oidc": oidcCookie } : undefined,
@@ -340,7 +387,7 @@ describe("OIDC flow with a mocked IdP", () => {
   });
 
   it("signs in without email_verified when it is not required", async () => {
-    const env = { ...oidcEnv, OIDC_REQUIRE_EMAIL_VERIFIED: "false" };
+    const env = { ...adminEnv, OIDC_REQUIRE_EMAIL_VERIFIED: "false" };
     idTokenClaims = { email: "alice@example.com", name: "Alice" };
     const { location, oidcCookie } = await startLogin("/wiki", env);
     const res = await callback(`code=abc&state=${location.searchParams.get("state")}`, oidcCookie, env);
@@ -371,63 +418,122 @@ describe("OIDC flow with a mocked IdP", () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain("alice@example.com");
   });
 
-  it("returns 403 for emails outside the allowlist", async () => {
-    const env = { ...oidcEnv, ALLOWED_EMAILS: "other.com" };
-    const login = await send(`${OIDC_ORIGIN}/auth/login`, { env });
-    const location = new URL(login.headers.get("Location") ?? "");
-    pendingNonce = location.searchParams.get("nonce") ?? "";
-    const oidcCookie = setCookies(login)["__Host-testapp_oidc"]?.value ?? "";
-    const res = await send(`${OIDC_ORIGIN}/auth/oidc/callback?code=abc&state=${location.searchParams.get("state")}`, {
-      env,
-      cookies: { "__Host-testapp_oidc": oidcCookie },
-    });
-    expect(res.status).toBe(403);
-    expect(await db.select().from(users).all()).toHaveLength(0);
-  });
-
   async function loginWith(env: Partial<CoreBindings>) {
     const { location, oidcCookie } = await startLogin("/wiki", env);
     return callback(`code=abc&state=${location.searchParams.get("state")}`, oidcCookie, env);
   }
 
-  it("returns 403 and creates nothing when ALLOWED_EMAILS is empty", async () => {
+  it("returns 403 and logs initial_admin_not_configured without users and INITIAL_ADMIN_EMAIL", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await loginWith({ ...oidcEnv, ALLOWED_EMAILS: "" });
+    const res = await loginWith(oidcEnv);
     expect(res.status).toBe(403);
     expect(await res.text()).toContain("このアカウントではログインできません");
     expect(await db.select().from(users).all()).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "allowlist_empty" });
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "initial_admin_not_configured" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("alice@example.com");
   });
 
-  it("treats an ALLOWED_EMAILS of only commas and spaces as empty", async () => {
+  it("returns 403 not_invited for an email other than INITIAL_ADMIN_EMAIL without users", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await loginWith({ ...oidcEnv, ALLOWED_EMAILS: " , ," });
+    const res = await loginWith({ ...oidcEnv, INITIAL_ADMIN_EMAIL: "bob@example.com" });
     expect(res.status).toBe(403);
     expect(await db.select().from(users).all()).toHaveLength(0);
-    expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "allowlist_empty" });
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "not_invited" });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("alice@example.com");
   });
 
-  it("logs not_allowed for an email outside a non-empty allowlist", async () => {
+  it("returns 403 not_invited for an unregistered email once a user exists, even for INITIAL_ADMIN_EMAIL", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const res = await loginWith({ ...oidcEnv, ALLOWED_EMAILS: "other.com" });
-    expect(res.status).toBe(403);
-    expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "not_allowed" });
+    await createUser({ email: "bob@example.com", role: "admin" });
+    for (const env of [adminEnv, oidcEnv]) {
+      const res = await loginWith(env);
+      expect(res.status).toBe(403);
+    }
+    expect(await db.select().from(users).all()).toHaveLength(1);
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+    expect(warn.mock.calls).toEqual([
+      ["oidc login rejected", { reason: "not_invited" }],
+      ["oidc login rejected", { reason: "not_invited" }],
+    ]);
   });
 
-  it.each([["*"], ["*,example.com"]])("signs in any email with ALLOWED_EMAILS=%j", async (allowedEmails) => {
-    idTokenClaims = { ...idTokenClaims, email: "alice@outside.test" };
-    const res = await loginWith({ ...oidcEnv, ALLOWED_EMAILS: allowedEmails });
+  it("signs in an invited user with the registered role and links the identity", async () => {
+    await createUser({ email: "bob@example.com", role: "admin" });
+    const invited = await createUser({ email: "alice@example.com", role: "member", password: null });
+    const res = await loginWith(oidcEnv);
     expect(res.status).toBe(303);
-    expect(res.headers.get("Location")).toBe("/wiki");
-    const user = await db.select().from(users).where(eq(users.oidcSubject, "sub-1")).get();
-    expect(user?.email).toBe("alice@outside.test");
+    const cookies = sessionCookies(res);
+    const me = await send(`${OIDC_ORIGIN}/api/v1/me`, { env: oidcEnv, cookies });
+    expect(await me.json()).toMatchObject({ id: invited.id, role: "member", status: "active" });
+    expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({
+      oidcIssuer: ISSUER,
+      oidcSubject: "sub-1",
+    });
+  });
+
+  it("links a user registered through POST /api/v1/users on their first sign-in", async () => {
+    const adminLogin = await loginWith(adminEnv);
+    expect(adminLogin.status).toBe(303);
+    const adminCookies = sessionCookies(adminLogin);
+    const created = await send(`${OIDC_ORIGIN}/api/v1/users`, {
+      env: oidcEnv,
+      cookies: adminCookies,
+      json: { email: "Bob@Example.com", role: "member" },
+    });
+    expect(created.status).toBe(201);
+    const bob = (await created.json()) as { id: string; status: string };
+    expect(bob.status).toBe("invited");
+
+    idTokenClaims = { ...idTokenClaims, sub: "sub-bob", email: "bob@example.com", name: "Bob" };
+    const res = await loginWith(oidcEnv);
+    expect(res.status).toBe(303);
+    const me = await send(`${OIDC_ORIGIN}/api/v1/me`, { env: oidcEnv, cookies: sessionCookies(res) });
+    expect(await me.json()).toMatchObject({ id: bob.id, role: "member", status: "active" });
+    expect(await db.select().from(users).where(eq(users.id, bob.id)).get()).toMatchObject({ oidcSubject: "sub-bob" });
+  });
+
+  it("returns 403 for a user deleted before the first sign-in", async () => {
+    await createUser({ email: "bob@example.com", role: "admin" });
+    const invited = await createUser({ email: "alice@example.com", password: null });
+    await db.delete(users).where(eq(users.id, invited.id)).run();
+    const res = await loginWith(oidcEnv);
+    expect(res.status).toBe(403);
+    expect(await db.select().from(users).all()).toHaveLength(1);
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+  });
+
+  it("does not link an invited user whose email is not verified", async () => {
+    await createUser({ email: "bob@example.com", role: "admin" });
+    const invited = await createUser({ email: "alice@example.com", password: null });
+    idTokenClaims = { ...idTokenClaims, email_verified: false };
+    const res = await loginWith(oidcEnv);
+    expect(res.status).toBe(403);
+    expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: null });
+    expect(await db.select().from(sessions).all()).toHaveLength(0);
+  });
+
+  it("ignores ALLOWED_EMAILS left in the environment", async () => {
+    const leftover: Record<string, string> = { ALLOWED_EMAILS: "" };
+    const res = await loginWith({ ...adminEnv, ...leftover });
+    expect(res.status).toBe(303);
+    expect(await db.select().from(users).all()).toHaveLength(1);
+  });
+
+  it("skips beforeOidcUserLinkOrCreate for uninvited emails", async () => {
+    const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(true);
+    hooks.beforeOidcUserLinkOrCreate = check;
+    expect((await loginWith(oidcEnv)).status).toBe(403);
+    expect(check).not.toHaveBeenCalled();
+    expect(await db.select().from(users).all()).toHaveLength(0);
   });
 
   it("denies first registration before creating a user or session", async () => {
     idTokenClaims = { ...idTokenClaims, email: " Alice@Example.com ", hd: "example.com" };
     const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(false);
     hooks.beforeOidcUserLinkOrCreate = check;
-    expect((await loginWith(oidcEnv)).status).toBe(403);
+    expect((await loginWith(adminEnv)).status).toBe(403);
     expect(check).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
       operation: "create", email: "alice@example.com", issuer: ISSUER, subject: "sub-1",
       claims: expect.objectContaining({ hd: "example.com", email_verified: true }),
@@ -455,7 +561,7 @@ describe("OIDC flow with a mocked IdP", () => {
 
   it("fails closed when the initial identity check throws", async () => {
     hooks.beforeOidcUserLinkOrCreate = async () => { throw new Error("identity check failed"); };
-    expect((await loginWith(oidcEnv)).status).toBe(500);
+    expect((await loginWith(adminEnv)).status).toBe(500);
     expect(await db.select().from(users).all()).toHaveLength(0);
     expect(await db.select().from(sessions).all()).toHaveLength(0);
   });
@@ -468,26 +574,27 @@ describe("OIDC flow with a mocked IdP", () => {
         .first<{ count: number }>();
       calls.push(`${userId}:${row?.count}`);
     };
-    const res = await loginWith(oidcEnv);
+    const res = await loginWith(adminEnv);
     expect(res.status).toBe(303);
     const user = await db.select().from(users).where(eq(users.oidcSubject, "sub-1")).get();
     expect(calls).toEqual([`${user?.id}:0`]);
   });
 
-  it("runs userCreatedStatements with the JIT INSERT", async () => {
+  it("runs userCreatedStatements with the INSERT of the first admin", async () => {
     hooks.userCreatedStatements = (d1, userId) => [
       d1
         .prepare("INSERT INTO user_notes (user_id, note) SELECT ?1, 'jit' WHERE EXISTS (SELECT 1 FROM users WHERE id = ?1)")
         .bind(userId),
     ];
-    expect((await loginWith(oidcEnv)).status).toBe(303);
+    expect((await loginWith(adminEnv)).status).toBe(303);
     const user = await db.select().from(users).where(eq(users.oidcSubject, "sub-1")).get();
+    expect(user?.role).toBe("admin");
     const note = await workerEnv.DB.prepare("SELECT note FROM user_notes WHERE user_id = ?")
       .bind(user?.id ?? "")
       .first<{ note: string }>();
     expect(note?.note).toBe("jit");
     // A linked user signs in again without a new INSERT.
-    expect((await loginWith(oidcEnv)).status).toBe(303);
+    expect((await loginWith(adminEnv)).status).toBe(303);
     const row = await workerEnv.DB.prepare("SELECT COUNT(*) AS count FROM user_notes").first<{ count: number }>();
     expect(row?.count).toBe(1);
   });

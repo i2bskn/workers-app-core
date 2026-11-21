@@ -12,7 +12,9 @@ export type UserDeleteStatements<DeleteData> = {
 
 // Every hook is optional. Without hooks, nothing runs besides the package's own statements.
 export type CoreHooks<AppBindings, DeleteData> = {
-  // Authorize an initial OIDC identity association before writing the user. Linked identities skip this hook.
+  // Authorize an initial OIDC identity association before writing the user. "link" is the first sign-in of an
+  // invited user (registered beforehand, not linked yet); "create" is only the creation of the first admin by
+  // INITIAL_ADMIN_EMAIL. Linked identities and uninvited emails skip this hook.
   beforeOidcUserLinkOrCreate?(args: {
     operation: "link" | "create";
     env: AppBindings;
@@ -22,12 +24,13 @@ export type CoreHooks<AppBindings, DeleteData> = {
     email: string;
     claims: Readonly<Record<string, unknown>>;
   }): Promise<boolean>;
-  // Appended after the INSERT of a user, in the same batch: the initial setup, the first OIDC sign-in, and
-  // POST /api/v1/users. The INSERT of the setup may insert nothing, so each statement must guard itself with
-  // EXISTS (SELECT 1 FROM users WHERE id = ?).
+  // Appended after the INSERT of a user, in the same batch: the initial setup, the first OIDC sign-in of
+  // INITIAL_ADMIN_EMAIL, and POST /api/v1/users. The INSERT of the setup and of the first admin may insert nothing,
+  // so each statement must guard itself with EXISTS (SELECT 1 FROM users WHERE id = ?).
   userCreatedStatements?(d1: D1Database, userId: string, now: number): D1PreparedStatement[];
-  // Called right before a web session is issued or rotated on sign-in: password login, the OIDC callback,
-  // POST /auth/refresh and GET /auth/login with a valid refresh cookie. An exception fails the request with 500.
+  // Called right before a web session is issued or rotated on sign-in: password login, the sign-in after accepting
+  // an invitation, the OIDC callback, POST /auth/refresh and GET /auth/login with a valid refresh cookie. An exception
+  // fails the request with 500.
   beforeSessionIssued?(args: { env: AppBindings; db: Db; userId: string; now: number }): Promise<void>;
   // Statements in the batch that deletes a user. guard binds the user ID as ?1; app statements must include it,
   // bind the user ID as ?1 and may use ?2 and on for their own values.

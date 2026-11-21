@@ -1,6 +1,7 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "./db/client.js";
 import type { UserRow } from "./db/schema.js";
+import { normalizeEmail } from "./auth/validate.js";
 
 // The bindings the package reads. Apps extend this type with their own.
 export type CoreBindings = {
@@ -17,7 +18,7 @@ export type CoreBindings = {
   OIDC_ISSUER?: string;
   OIDC_CLIENT_ID?: string;
   OIDC_CLIENT_SECRET?: string;
-  ALLOWED_EMAILS?: string;
+  INITIAL_ADMIN_EMAIL?: string;
   OIDC_REQUIRE_EMAIL_VERIFIED?: string;
   SESSION_MAX_AGE_HOURS?: string;
   SESSION_IDLE_TIMEOUT_HOURS?: string;
@@ -36,7 +37,8 @@ export type OidcConfig = {
   issuer: string;
   clientId: string;
   clientSecret: string;
-  allowedEmails: string;
+  // While there are no users, the first sign-in with this email creates the first admin. Null when unset.
+  initialAdminEmail: string | null;
   requireEmailVerified: boolean;
 };
 
@@ -107,13 +109,15 @@ export function loadConfig(env: CoreBindings): ConfigResult {
     if (clientSecret === "") invalid.push("OIDC_CLIENT_SECRET");
     const requireEmailVerified = parseRequireEmailVerified(env.OIDC_REQUIRE_EMAIL_VERIFIED);
     if (requireEmailVerified === null) invalid.push("OIDC_REQUIRE_EMAIL_VERIFIED");
-    if (appOrigin !== null && issuer !== null && requireEmailVerified !== null) {
+    const initialAdminEmail = parseInitialAdminEmail(env.INITIAL_ADMIN_EMAIL);
+    if (initialAdminEmail === undefined) invalid.push("INITIAL_ADMIN_EMAIL");
+    if (appOrigin !== null && issuer !== null && requireEmailVerified !== null && initialAdminEmail !== undefined) {
       oidc = {
         appOrigin,
         issuer,
         clientId,
         clientSecret,
-        allowedEmails: env.ALLOWED_EMAILS ?? "",
+        initialAdminEmail,
         requireEmailVerified,
       };
     }
@@ -167,6 +171,14 @@ function parseRequireEmailVerified(value: unknown): boolean | null {
   if (value === "" || value === "true") return true;
   if (value === "false") return false;
   return null;
+}
+
+// Unset and "" mean no initial admin (null). An email is normalized. Any other value (including non-string values
+// from JSON variables) is a configuration error (undefined).
+function parseInitialAdminEmail(value: unknown): string | null | undefined {
+  if (value === undefined || value === "") return null;
+  if (typeof value !== "string") return undefined;
+  return normalizeEmail(value) ?? undefined;
 }
 
 // Unset and "" mean the default (undefined). A whole number of hours from 1 to MAX_SESSION_HOURS, written without

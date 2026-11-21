@@ -8,6 +8,7 @@ import {
   sessionExpiresAt,
 } from "../src/auth/sessions.js";
 import { hashToken } from "../src/auth/tokens.js";
+import { deleteUser } from "../src/auth/users.js";
 import { clock } from "../src/clock.js";
 import { sessions, type UserRow } from "../src/db/schema.js";
 import { loadConfig } from "../src/config.js";
@@ -195,30 +196,28 @@ describe("auth mode switch", () => {
     expect(rows.every((r) => r.revokedAt !== null)).toBe(true);
   });
 
-  it("revokes oidc sessions of users removed from the allowlist", async () => {
-    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
+  it("refreshes oidc sessions regardless of the email domain", async () => {
+    const outsider = await createUser({ email: "carol@outside.test", password: null });
+    const issued = await issueSession(db, outsider.id, testConfig(oidcEnv), T0);
+    const url = `${OIDC_ORIGIN}/auth/refresh`;
+    const leftover: Record<string, string> = { ALLOWED_EMAILS: "" };
     const res = await refresh(
       { "__Host-testapp_rt": issued.refreshToken },
-      { url: `${OIDC_ORIGIN}/auth/refresh`, env: { ...(oidcEnv as Record<string, string>), ALLOWED_EMAILS: "other.com" } },
+      { url, env: { ...(oidcEnv as Record<string, string>), ...leftover } },
     );
-    expect(res.status).toBe(401);
-    const rows = await familyRows(issued.refreshToken);
-    expect(rows.every((r) => r.revokedAt !== null)).toBe(true);
+    expect(res.status).toBe(204);
   });
 
-  it("revokes oidc sessions when ALLOWED_EMAILS becomes empty", async () => {
-    const issued = await issueSession(db, alice.id, testConfig(oidcEnv), T0);
-    const url = `${OIDC_ORIGIN}/auth/refresh`;
-    // Allowed by the default allowlist of the tests.
-    const allowed = await refresh({ "__Host-testapp_rt": issued.refreshToken }, { url, env: oidcEnv as Record<string, string> });
-    expect(allowed.status).toBe(204);
-    const cookies = sessionCookies(allowed);
-
-    const res = await refresh(cookies, { url, env: { ...(oidcEnv as Record<string, string>), ALLOWED_EMAILS: "" } });
+  it("fails the refresh of a deleted oidc user", async () => {
+    const bob = await createUser({ email: "bob@example.com", password: null });
+    const issued = await issueSession(db, bob.id, testConfig(oidcEnv), T0);
+    expect(await deleteUser(db, bob.id)).toEqual({ ok: true });
+    const res = await refresh({ "__Host-testapp_rt": issued.refreshToken }, {
+      url: `${OIDC_ORIGIN}/auth/refresh`,
+      env: oidcEnv as Record<string, string>,
+    });
     expect(res.status).toBe(401);
-    expectCleared(res);
-    const rows = await familyRows(cookies["__Host-testapp_rt"]);
-    expect(rows.every((r) => r.revokedAt !== null)).toBe(true);
+    expect(await res.json()).toMatchObject({ error: { code: "invalid_refresh_token" } });
   });
 
   it("uses a 24 hour absolute expiry for oidc sessions", async () => {

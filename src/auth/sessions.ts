@@ -1,8 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { sessions, users, type SessionRow, type UserRow } from "../db/schema.js";
+import { sessions, users, type SessionRow } from "../db/schema.js";
 import type { Config, SessionConfig } from "../config.js";
-import { isEmailAllowed, parseAllowlist } from "./allowlist.js";
 import { generateRefreshToken, hashToken } from "./tokens.js";
 
 export const REUSE_GRACE_MS = 10 * 1000;
@@ -186,12 +185,8 @@ async function checkRotatable(
   }
 
   const user = await db.select().from(users).where(eq(users.id, row.userId)).get();
+  // A deleted user cannot refresh.
   if (!user) return fail(true);
-
-  if (config.authMode === "oidc" && !isAllowedByConfig(config, user)) {
-    await revokeFamilyQuery(db, row.familyId, now).run();
-    return fail(true);
-  }
 
   if (row.rotatedAt !== null) {
     if (now - row.rotatedAt <= REUSE_GRACE_MS) return fail(false);
@@ -202,8 +197,4 @@ async function checkRotatable(
   // family is not revoked here: a concurrent request may have read the row before the winner rotated it.
   if (sessionExpiresAt(row, config.session) <= now) return fail(true);
   return null;
-}
-
-function isAllowedByConfig(config: Config, user: UserRow): boolean {
-  return isEmailAllowed(user.email, parseAllowlist(config.oidc?.allowedEmails ?? ""));
 }

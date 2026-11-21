@@ -50,6 +50,17 @@ export const sessions = sqliteTable(
 export type UserRow = typeof users.$inferSelect;
 export type SessionRow = typeof sessions.$inferSelect;
 
+// Invitation tokens of password mode: a user without a password sets one through the link. One token per user;
+// issuing another replaces it. Only the hash of the token is stored.
+export const userInvitations = sqliteTable("user_invitations", {
+  userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: integer("expires_at").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+
+export type UserInvitationRow = typeof userInvitations.$inferSelect;
+
 export const mfaAccounts = sqliteTable("mfa_accounts", {
   userId: text("user_id").primaryKey().references(() => users.id, { onDelete: "cascade" }),
   // Bumped only when the set of factors changes. Old challenges must not accept a different set.

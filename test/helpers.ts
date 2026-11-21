@@ -44,17 +44,12 @@ export async function resetDb(): Promise<void> {
   await helpers.resetDb(["user_notes"]);
 }
 
-// The default allowlist of the OIDC tests: a domain (not "*"), so that the domain match is exercised end to
-// end. Every email that the tests sign in with through OIDC is in this domain.
-export const OIDC_ALLOWED_EMAILS = "example.com";
-
 export const oidcEnv: Partial<CoreBindings> = {
   AUTH_MODE: "oidc",
   APP_ORIGIN: OIDC_ORIGIN,
   OIDC_ISSUER: "https://idp.example.com",
   OIDC_CLIENT_ID: "test-client",
   OIDC_CLIENT_SECRET: "client-secret",
-  ALLOWED_EMAILS: OIDC_ALLOWED_EMAILS,
 };
 
 // The configuration of the test environment with some variables replaced, e.g. testConfig(oidcEnv).

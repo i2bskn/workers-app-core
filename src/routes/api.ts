@@ -1,10 +1,14 @@
 import type { Context, Env, MiddlewareHandler } from "hono";
 import type { User } from "../api-types.js";
 import { apiError } from "../auth/middleware.js";
+import type { AuthMode } from "../config.js";
 import { isJsonObject } from "../auth/validate.js";
 import type { UserRow } from "../db/schema.js";
 
-export function toApiUser(user: UserRow): User {
+// status depends on the auth mode: a user is invited until they have a password (password mode) or a linked OIDC
+// identity (oidc mode).
+export function toApiUser(user: UserRow, authMode: AuthMode): User {
+  const invited = authMode === "password" ? user.passwordHash === null : user.oidcSubject === null;
   return {
     id: user.id,
     email: user.email,
@@ -12,6 +16,7 @@ export function toApiUser(user: UserRow): User {
     role: user.role,
     created_at: user.createdAt,
     last_login_at: user.lastLoginAt,
+    status: invited ? "invited" : "active",
   };
 }
 

@@ -117,3 +117,43 @@ describe("loadConfig session lifetime", () => {
     );
   });
 });
+
+describe("loadConfig INITIAL_ADMIN_EMAIL", () => {
+  const loadOidc = (overrides: Partial<CoreBindings>) =>
+    loadConfig({ ...workerEnv, ...oidcEnv, ...overrides } as CoreBindings);
+
+  it.each([
+    [undefined, null],
+    ["", null],
+    ["admin@example.com", "admin@example.com"],
+    [" Admin@Example.COM ", "admin@example.com"],
+  ])("reads %j as %j in oidc mode", (value, expected) => {
+    const result = loadOidc({ INITIAL_ADMIN_EMAIL: value });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.oidc?.initialAdminEmail).toBe(expected);
+  });
+
+  it.each([["not-an-email"], [" "], [1 as unknown as string], [true as unknown as string]])(
+    "rejects %j in oidc mode",
+    (value) => {
+      const result = loadOidc({ INITIAL_ADMIN_EMAIL: value });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.invalid).toContain("INITIAL_ADMIN_EMAIL");
+    },
+  );
+
+  it("ignores the value in password mode", () => {
+    const result = loadConfig({ ...workerEnv, AUTH_MODE: "password", INITIAL_ADMIN_EMAIL: "bogus" } as CoreBindings);
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.oidc).toBeNull();
+  });
+
+  it("ignores ALLOWED_EMAILS left in the environment", () => {
+    for (const value of ["", "*", "example.com", 1]) {
+      const leftover: Record<string, unknown> = { ALLOWED_EMAILS: value };
+      const result = loadConfig({ ...workerEnv, ...oidcEnv, ...leftover } as CoreBindings);
+      expect(result.ok).toBe(true);
+      expect(result.ok && Object.keys(result.config.oidc ?? {})).not.toContain("allowedEmails");
+    }
+  });
+});

@@ -50,6 +50,8 @@ export type {
   ChangeMyPasswordRequest,
   CreateUserInput,
   CreateUserRequest,
+  CreateUserResponse,
+  Invitation,
   ResetPasswordRequest,
   UpdateUserRequest,
   User,

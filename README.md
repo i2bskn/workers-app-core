@@ -7,8 +7,8 @@ It provides:
 
 - Web sign-in with email and password, or with an OpenID Connect provider (`AUTH_MODE=oidc`), with rotating refresh
   tokens stored in D1.
-- The initial setup page that creates the first admin, and a JSON API to manage users (`/api/v1/me`,
-  `/api/v1/users`).
+- The initial setup page that creates the first admin, invitation links for password mode, and a JSON API to manage
+  users (`/api/v1/me`, `/api/v1/users`). In oidc mode, only users registered by an admin can sign in.
 - An OAuth 2.1 authorization server for MCP clients (`@cloudflare/workers-oauth-provider`), with dynamic client
   registration and Client ID Metadata Documents, a consent page, and a stateless MCP endpoint at `/mcp`
   (`@modelcontextprotocol/sdk`).
@@ -138,6 +138,24 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 Max-Age of the refresh cookie from `session.expiresAt`. Use `core.issueSession` only in trusted server code after
 the caller has authenticated the user and completed any required MFA. For browser sign-in, use the core auth routes.
 
+Breaking changes in 0.4.0:
+
+- `ALLOWED_EMAILS` is removed and no longer read (a value left in the environment is ignored, not an error). In oidc
+  mode, a first sign-in is allowed only for users that an admin registered beforehand (`POST /api/v1/users`), and for
+  `INITIAL_ADMIN_EMAIL` while there are no users. Existing users can still sign in, including users created by a
+  domain entry or `*` in `ALLOWED_EMAILS`, and users removed from `ALLOWED_EMAILS` to stop their sign-in (their rows
+  remain). **Before upgrading**, compare the user list with `ALLOWED_EMAILS` and delete the users who must not sign
+  in; deleting a user also ends their sessions and MCP grants. Then remove `ALLOWED_EMAILS`.
+- Refreshing an oidc session no longer revokes it for users outside `ALLOWED_EMAILS`. Delete a user to stop them.
+- `POST /api/v1/users` is available in oidc mode as well, without a password. `CreateUserRequest.password` is
+  optional (and may be `null`), and `CreateUserInput.password` is `string | null`.
+- `OidcConfig.allowedEmails` is removed and `OidcConfig.initialAdminEmail` (`string | null`) is added.
+- A `user_invitations` table is added. Re-export the core tables, run `drizzle-kit generate` and apply the migration
+  to D1 before deploying.
+- `User` has a `status` (`"active"` or `"invited"`). `POST /api/v1/users` answers a `CreateUserResponse` (the `User`
+  with an `invitation`).
+- The exported `toApiUser(user, authMode)` takes the auth mode.
+
 Breaking changes in 0.3.0:
 
 - Password sign-in reads the MFA tables, even under the default `optional` policy. Before deploying, re-export the
@@ -157,19 +175,23 @@ Breaking changes in 0.2.0:
 Every hook is optional; without hooks only the package's own statements run.
 
 - `userCreatedStatements(d1, userId, now): D1PreparedStatement[]`: appended after the INSERT of a user in the same
-  `d1.batch`, at the initial setup, the first OIDC sign-in (just-in-time creation) and `POST /api/v1/users`. The setup
-  INSERT is `INSERT ... WHERE NOT EXISTS (SELECT 1 FROM users)` and may insert nothing when two setups race, so each
+  `d1.batch`, at the initial setup, the first OIDC sign-in of `INITIAL_ADMIN_EMAIL` (the creation of the first admin)
+  and `POST /api/v1/users`. The INSERTs of the setup and of the first admin are
+  `INSERT ... WHERE NOT EXISTS (SELECT 1 FROM users)` and may insert nothing when two sign-ins race, so each
   statement must guard itself with `EXISTS (SELECT 1 FROM users WHERE id = ?)`. Success is still decided by the
   INSERT. `d1` is `db.$client`. A UNIQUE violation in your statements fails the request with 500; only a violation
   of the `users` table itself is answered as a duplicate (`email_taken`, or a retry on the OIDC path).
-- `beforeOidcUserLinkOrCreate({ operation, env, db, issuer, subject, email, claims })`: after ID token and allowlist
-  checks, authorize the first association with an OIDC identity. Return `true` to allow linking an existing user
-  (`operation === "link"`) or creating a user (`"create"`), or `false` for a 403 before the user write or session
+- `beforeOidcUserLinkOrCreate({ operation, env, db, issuer, subject, email, claims })`: after the ID token checks,
+  authorize the first association with an OIDC identity. `operation` is `"link"` for the first sign-in of a user
+  registered beforehand (an invitation), and `"create"` only for the creation of the first admin by
+  `INITIAL_ADMIN_EMAIL`. Return `true` to allow it, or `false` for a 403 before the user write or session
   issuance. An exception fails the request with 500. The hook receives the normalized email and the verified token
-  claims. Already linked issuer/subject pairs skip this hook, including when the email changes. Concurrent sign-ins
+  claims, e.g. to require a Google `hd` claim. Already linked issuer/subject pairs skip this hook, including when the
+  email changes, and so do emails that are not invited (they get a 403 without any write). Concurrent sign-ins
   can cause a retry: use this hook for checks, and commit one-time effects atomically with the user write.
 - `beforeSessionIssued({ env, db, userId, now })`: called right before a web session is issued or rotated on sign-in:
-  password login (after all required factors), the OIDC callback (after the user is resolved), `POST /auth/refresh` and
+  password login (after all required factors), the sign-in after accepting an invitation link (likewise), the OIDC
+  callback (after the user is resolved), `POST /auth/refresh` and
   `GET /auth/login` with a valid refresh cookie (after the rotation, before the cookies). Not called on the setup, or
   when a concurrent rotation already won. An exception fails the request with 500 and sets no cookies.
   On the two refresh paths the rotation is already stored when the hook runs, so a failing hook leaves the browser
@@ -215,8 +237,8 @@ props, metadata, revokeExistingGrants })` requires `authorizedAt` and `revokeExi
 
 ## Database
 
-Re-export the core tables from the app's Drizzle schema. Generate and apply the app's schema migration before
-deploying a version that queries the new tables. When upgrading a password-mode app that re-exports only
+Re-export the core tables (`users`, `sessions`, `user_invitations` and the password MFA tables) from the app's
+Drizzle schema. Generate and apply the app's schema migration before deploying a version that queries the new tables. When upgrading a password-mode app that re-exports only
 `users` and `sessions`, use the export below, run `drizzle-kit generate`, apply the generated migration
 to D1, then deploy the Worker. Password sign-in checks the MFA tables even under the default optional policy.
 
@@ -239,10 +261,30 @@ Variables and secrets:
 | `PASSWORD_MFA_POLICY` | password: `optional` (default), `admins`, or `all`. An enrolled account always completes MFA on password login. |
 | `PASSWORD_MFA_KEY` | password: 32 random bytes in standard base64 (generate with `openssl rand -base64 32`). Store as a Worker Secret to enable TOTP. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | oidc |
-| `ALLOWED_EMAILS` | oidc: comma separated emails or domains |
-| `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` |
+| `INITIAL_ADMIN_EMAIL` | oidc: while there are no users, the first sign-in with this email creates the first admin. Ignored once a user exists. |
+| `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` (see below) |
 | `SESSION_MAX_AGE_HOURS` | absolute lifetime of web sessions from the sign-in, in hours (default 720 in password mode, 24 in oidc mode) |
 | `SESSION_IDLE_TIMEOUT_HOURS` | lifetime of web sessions from the last refresh, in hours (default: none) |
+
+### Users
+
+In password mode, the first admin is created on the initial setup page (`/auth/setup`), which is open only while
+there are no users: complete it right after deploying. Admins then add users with `POST /api/v1/users`, either with
+an initial password, or without one to get an invitation link (see below).
+
+In oidc mode, sign-in is by invitation. While there are no users, the first sign-in with `INITIAL_ADMIN_EMAIL`
+creates the first admin; without `INITIAL_ADMIN_EMAIL`, nobody can sign in to an empty deployment (logged as
+`initial_admin_not_configured`). Admins register users with `POST /api/v1/users` (an email and a role, no password).
+Only registered emails can sign in for the first time: the email of the ID token must match the registered user,
+whose OIDC `iss` and `sub` are then linked to it. Later sign-ins identify the user by `iss` and `sub`, and the email
+is not compared again. Other emails get a 403, and no user or session is created. Deleting a user who has not
+signed in yet withdraws the invitation; deleting a user who has signed in stops them (their sessions and MCP grants
+end too). An invalid `INITIAL_ADMIN_EMAIL` is a configuration error.
+
+`OIDC_REQUIRE_EMAIL_VERIFIED=false` accepts ID tokens without `email_verified` (a claim that is present must still
+be `true`). Use it only when the IdP guarantees verified emails by other means: if the IdP lets someone sign in with
+an email they have not verified, they can be linked to an invited user or to `INITIAL_ADMIN_EMAIL` and take over
+that account.
 
 `SESSION_MAX_AGE_HOURS` and `SESSION_IDLE_TIMEOUT_HOURS` are whole numbers from 1 to 9600 (400 days), written as
 strings (`"168"`, not `168`, in `vars`); any other value is a configuration error. An idle timeout longer than the
@@ -309,9 +351,16 @@ An invalid configuration answers every request with 500 without details, and log
   request gets 401, so the inactivity actually allowed is between about the idle timeout minus 15 minutes and the
   idle timeout.
 - MCP access tokens last 12 hours, refresh tokens 30 days in both modes.
-- `ALLOWED_EMAILS`: an entry that is exactly `*` allows everyone; an empty list allows no one. Other entries match
-  the whole email when they contain `@`, otherwise the domain exactly (subdomains do not match). Existing oidc
-  sessions of users removed from the list are revoked on their next refresh.
+- Invitation links (password mode): `POST /api/v1/users` without a password creates a user without a password and
+  returns `invitation: { url, expires_at }`; `POST /api/v1/users/:id/invitation` issues a new link for such a user,
+  replacing the previous one (409 `already_active` once a password is set). The link is
+  `<origin>/auth/invite?token=...`, where the origin is `APP_ORIGIN` when it is a valid HTTPS origin, otherwise the
+  origin of the API request. `GET /auth/invite` shows the password form and `POST /auth/invite` sets the password and
+  signs the user in (through MFA enrollment when the policy requires it). Only the SHA-256 hash of the token is
+  stored, the URL is returned only when it is issued, and the token is never logged. A link is valid for 7 days and
+  only once: setting the password consumes it, and so does an admin setting the password. Deleting the user deletes
+  it. The token is in the query string, so it may remain in the browser history and in platform request logs (e.g.
+  Workers observability); the pages are sent with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
 - `users.mcp_revoked_at` is set when a password changes or an admin revokes a user's sessions. MCP tokens authorized
   at or before it are rejected, including grants that the revocation in KV missed. Deleting a user also revokes their
   grants; tokens of deleted users are rejected.
@@ -338,7 +387,7 @@ export const { send, login, createUser, resetDb, sessionCookies } = createTestHe
 });
 ```
 
-`resetDb(appTables)` deletes the given tables (children first), then `sessions` and `users`. Also: `setCookies`,
+`resetDb(appTables)` deletes the given tables (children first), then `sessions`, `user_invitations` and `users`. Also: `setCookies`,
 `dbChangingBefore`, `d1With`, `d1RecordingLargeBinds`, `countTable`, and the constants `PASSWORD`, `TEST_JWT_SECRET`
 and `D1_MAX_BOUND_VALUES`.
 

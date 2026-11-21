@@ -55,6 +55,7 @@ describe("GET /api/v1/me", () => {
       role: "member",
       created_at: 2000,
       last_login_at: expect.any(Number),
+      status: "active",
     });
   });
 
@@ -170,8 +171,19 @@ describe("admin user API", () => {
     const body = (await res.json()) as { users: { email: string }[] };
     expect(body.users.map((u) => u.email)).toEqual(["admin@example.com", "member@example.com"]);
     expect(Object.keys(body.users[0] ?? {}).sort()).toEqual(
-      ["created_at", "email", "id", "last_login_at", "name", "role"].sort(),
+      ["created_at", "email", "id", "last_login_at", "name", "role", "status"].sort(),
     );
+  });
+
+  it("tells invited users by status in password mode", async () => {
+    const invited = await createUser({ email: "invited@example.com", password: null, createdAt: 3000 });
+    const res = await send("/api/v1/users", { cookies: adminCookies });
+    const body = (await res.json()) as { users: { id: string; status: string }[] };
+    expect(body.users.map((u) => [u.id, u.status])).toEqual([
+      [admin.id, "active"],
+      [member.id, "active"],
+      [invited.id, "invited"],
+    ]);
   });
 
   it("tells the auth mode with the list", async () => {
@@ -192,8 +204,16 @@ describe("admin user API", () => {
       json: { email: " New@Example.com ", name: " New ", password: NEW_PASSWORD, role: "member" },
     });
     expect(res.status).toBe(201);
-    expect(await res.json()).toMatchObject({ email: "new@example.com", name: "New", role: "member", last_login_at: null });
+    expect(await res.json()).toMatchObject({
+      email: "new@example.com",
+      name: "New",
+      role: "member",
+      last_login_at: null,
+      status: "active",
+      invitation: null,
+    });
     expect((await login("new@example.com", NEW_PASSWORD))["__Host-testapp_at"]).toBeTruthy();
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM user_invitations").first("count")).toBe(0);
   });
 
   it("returns 409 email_taken for duplicate emails", async () => {
@@ -212,7 +232,8 @@ describe("admin user API", () => {
       [{ ...base, name: "a".repeat(101) }, "invalid_name"],
       [{ ...base, password: "short" }, "invalid_password"],
       [{ ...base, role: "owner" }, "invalid_role"],
-      [{ email: "x@example.com", role: "member" }, "invalid_password"],
+      [{ ...base, password: 123456789012 }, "invalid_password"],
+      [{ ...base, password: "" }, "invalid_password"],
     ];
     for (const [json, code] of cases) {
       const res = await send("/api/v1/users", { cookies: adminCookies, json });
@@ -303,12 +324,10 @@ describe("middleware order", () => {
 
   it("returns 404 before 403 for a member calling a password-only admin API in oidc mode", async () => {
     const cookies = await oidcCookiesFor(member);
-    const res = await send(`${OIDC_ORIGIN}/api/v1/users`, {
-      env: oidcEnv,
-      cookies,
-      json: { email: "x@example.com", password: NEW_PASSWORD, role: "member" },
-    });
-    expect(res.status).toBe(404);
+    for (const path of [`/api/v1/users/${admin.id}/password`, `/api/v1/users/${admin.id}/invitation`]) {
+      const res = await send(`${OIDC_ORIGIN}${path}`, { env: oidcEnv, cookies, json: { password: NEW_PASSWORD } });
+      expect(res.status).toBe(404);
+    }
   });
 
   it("returns 404 for password-only endpoints in oidc mode", async () => {
@@ -331,6 +350,70 @@ describe("middleware order", () => {
 
   it("returns 401 before 400 for invalid input without a session", async () => {
     expect((await send("/api/v1/users", { json: "not json" })).status).toBe(401);
+  });
+});
+
+describe("POST /api/v1/users in oidc mode", () => {
+  async function oidcCookiesFor(user: UserRow): Promise<SessionCookies> {
+    const now = Date.now();
+    const session = await issueSession(db, user.id, testConfig(oidcEnv), now);
+    const at = await core.signAccessToken({ sub: user.id, sid: session.sessionId }, env.JWT_SECRET ?? "", now);
+    return { "__Host-testapp_at": at, "__Host-testapp_rt": session.refreshToken };
+  }
+
+  function create(cookies: SessionCookies, json: unknown) {
+    return send(`${OIDC_ORIGIN}/api/v1/users`, { env: oidcEnv, cookies, json });
+  }
+
+  it("registers a user without a password", async () => {
+    const cookies = await oidcCookiesFor(admin);
+    const res = await create(cookies, { email: " Invited@Example.com ", name: "Invited", role: "admin" });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    expect(body).toMatchObject({ email: "invited@example.com", role: "admin", status: "invited", invitation: null });
+    const row = await db.select().from(users).where(eq(users.id, body.id)).get();
+    expect(row).toMatchObject({ passwordHash: null, oidcIssuer: null, oidcSubject: null });
+    expect((await create(cookies, { email: "null@example.com", password: null, role: "member" })).status).toBe(201);
+    expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM user_invitations").first("count")).toBe(0);
+  });
+
+  it("rejects a password", async () => {
+    const cookies = await oidcCookiesFor(admin);
+    for (const password of [NEW_PASSWORD, "", 1]) {
+      const res = await create(cookies, { email: "x@example.com", password, role: "member" });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        error: { code: "invalid_password", message: "OIDC ではパスワードを設定できません" },
+      });
+    }
+    expect(await db.select().from(users).where(eq(users.email, "x@example.com")).get()).toBeUndefined();
+  });
+
+  it("returns 409 email_taken for duplicate emails", async () => {
+    const cookies = await oidcCookiesFor(admin);
+    const res = await create(cookies, { email: "MEMBER@example.com", role: "member" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("email_taken");
+  });
+
+  it("returns 403 to members", async () => {
+    const cookies = await oidcCookiesFor(member);
+    const res = await create(cookies, { email: "x@example.com", role: "member" });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe("forbidden");
+  });
+
+  it("tells linked and unlinked users apart by status", async () => {
+    await db.update(users).set({ oidcIssuer: "https://idp.example.com", oidcSubject: "sub-admin" }).where(eq(users.id, admin.id)).run();
+    const cookies = await oidcCookiesFor(admin);
+    const res = await send(`${OIDC_ORIGIN}/api/v1/users`, { env: oidcEnv, cookies });
+    const body = (await res.json()) as { users: { id: string; status: string }[] };
+    expect(body.users.map((u) => [u.id, u.status])).toEqual([
+      [admin.id, "active"],
+      [member.id, "invited"],
+    ]);
+    const me = await send(`${OIDC_ORIGIN}/api/v1/me`, { env: oidcEnv, cookies });
+    expect(await me.json()).toMatchObject({ id: admin.id, status: "active" });
   });
 });
 
