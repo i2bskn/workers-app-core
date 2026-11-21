@@ -53,6 +53,7 @@ describe("safeNext", () => {
 
   it.each([
     ["//evil"],
+    ["/nested/..//outside.example"],
     ["/\\evil"],
     ["https://evil"],
     [""],

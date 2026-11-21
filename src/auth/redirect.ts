@@ -11,6 +11,6 @@ export function safeNext(next: unknown, baseOrigin: string): string {
   } catch {
     return "/";
   }
-  if (url.origin !== baseOrigin) return "/";
+  if (url.origin !== baseOrigin || url.pathname.startsWith("//")) return "/";
   return `${url.pathname}${url.search}${url.hash}`;
 }
