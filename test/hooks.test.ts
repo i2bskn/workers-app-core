@@ -378,6 +378,17 @@ describe("credentialsRevokedStatements", () => {
     expect(await notes(member.id)).toEqual(["revoke_sessions:0"]);
   });
 
+  it("runs after the session revocation on reset-mfa", async () => {
+    await login(member.email);
+    const cookies = await login(admin.email);
+    await env.DB.prepare("INSERT INTO mfa_accounts (user_id, revision) VALUES (?, 1)").bind(member.id).run();
+    hooks.credentialsRevokedStatements = recordActiveSessions;
+    const res = await send(`/api/v1/users/${member.id}/reset-mfa`, { method: "POST", cookies });
+    expect(res.status).toBe(204);
+    expect(reasons).toEqual(["admin_mfa_reset"]);
+    expect(await notes(member.id)).toEqual(["admin_mfa_reset:0"]);
+  });
+
   it.each([
     ["self_change", "/api/v1/me/password", { current_password: PASSWORD, new_password: NEW_PASSWORD }, "member"],
     ["admin_reset", "/api/v1/users/:id/password", { password: NEW_PASSWORD }, "admin"],
@@ -396,6 +407,20 @@ describe("credentialsRevokedStatements", () => {
     expect(await env.DB.prepare("SELECT totp_attempts, totp_retry_at FROM mfa_accounts WHERE user_id = ?")
       .bind(member.id).first()).toEqual({ totp_attempts: 20, totp_retry_at: retryAt });
     // The sessions are not revoked either.
+    expect((await send("/api/v1/me", { cookies: memberCookies })).status).toBe(200);
+  });
+
+  it("rolls back the batch of admin_mfa_reset when a statement fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const memberCookies = await login(member.email);
+    const cookies = await login(admin.email);
+    await env.DB.prepare("INSERT INTO mfa_accounts (user_id, revision, totp_attempts) VALUES (?, 1, 20)").bind(member.id).run();
+    hooks.credentialsRevokedStatements = failing;
+    const res = await send(`/api/v1/users/${member.id}/reset-mfa`, { method: "POST", cookies });
+    expect(res.status).toBe(500);
+    expect(await mcpRevokedAt(member.id)).toBeNull();
+    expect(await env.DB.prepare("SELECT revision, totp_attempts FROM mfa_accounts WHERE user_id = ?")
+      .bind(member.id).first()).toEqual({ revision: 1, totp_attempts: 20 });
     expect((await send("/api/v1/me", { cookies: memberCookies })).status).toBe(200);
   });
 });

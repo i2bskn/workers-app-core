@@ -14,8 +14,9 @@ export const users = sqliteTable(
     createdAt: integer("created_at").notNull(),
     updatedAt: integer("updated_at").notNull(),
     lastLoginAt: integer("last_login_at"),
-    // Set when the password changes or the sessions are revoked. The MCP handler rejects the tokens authorized at
-    // or before this time, including grants that the revocation in KV missed. NULL when never set.
+    // Set when the password changes, the sessions are revoked or an admin resets the MFA. The MCP handler rejects
+    // the tokens authorized at or before this time, including grants that the revocation in KV missed. NULL when
+    // never set.
     mcpRevokedAt: integer("mcp_revoked_at"),
   },
   (t) => [

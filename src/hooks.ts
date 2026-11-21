@@ -1,7 +1,7 @@
 import type { BatchItem } from "drizzle-orm/batch";
 import type { Db } from "./db/client.js";
 
-export type CredentialsRevokedReason = "admin_reset" | "self_change" | "revoke_sessions";
+export type CredentialsRevokedReason = "admin_reset" | "self_change" | "revoke_sessions" | "admin_mfa_reset";
 
 export type UserDeleteStatements<DeleteData> = {
   // Run before the DELETE of the sessions and the user, in the same batch. Each must include the guard.
@@ -42,8 +42,8 @@ export type CoreHooks<AppBindings, DeleteData> = {
   }): Promise<UserDeleteStatements<DeleteData>>;
   // After the delete batch succeeded, before the MCP grants are revoked. Exceptions are logged and ignored.
   afterUserDeleted?(args: { env: AppBindings; userId: string; data: DeleteData }): Promise<void>;
-  // Statements in the batch that revokes the credentials of a user (password reset or change, session revocation),
-  // after the revocation of the sessions.
+  // Statements in the batch that revokes the credentials of a user (password reset or change, session revocation,
+  // MFA reset by an admin), after the revocation of the sessions.
   credentialsRevokedStatements?(args: {
     db: Db;
     userId: string;

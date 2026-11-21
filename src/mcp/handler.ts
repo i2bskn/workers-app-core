@@ -112,8 +112,8 @@ export function createMcpHandler<AppBindings extends CoreBindings, AppProps exte
       const props = mergeMcpProps(appProps, rawProps);
       const user = await findUserById(db, rawProps.userId);
       if (!user) return invalidToken();
-      // Grants authorized at or before the last password change or session revocation, including those that the
-      // revocation in KV missed because its listing lags behind.
+      // Grants authorized at or before the last password change, session revocation or MFA reset, including those
+      // that the revocation in KV missed because its listing lags behind.
       if (user.mcpRevokedAt !== null && rawProps.authorizedAt <= user.mcpRevokedAt) return invalidToken();
 
       const requestContext: McpRequestContext<AppBindings, AppProps> = {

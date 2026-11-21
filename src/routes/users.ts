@@ -11,7 +11,7 @@ import type {
 } from "../api-types.js";
 import { clock } from "../clock.js";
 import type { CoreBindings } from "../config.js";
-import { userInvitations, users } from "../db/schema.js";
+import { mfaAccounts, mfaCredentials, mfaPending, mfaRecoveryCodes, userInvitations, users } from "../db/schema.js";
 import {
   insertInvitationStatement,
   invitationUrl,
@@ -165,6 +165,37 @@ export function createUsersRoutes({ middleware, hooks }: UsersRoutesDeps) {
         db.update(users).set({ mcpRevokedAt: now }).where(eq(users.id, id)),
         revokeUserSessionsQuery(db, id, now),
         ...extra,
+      ]);
+      return c.body(null, 204);
+    })
+    .post("/:id/reset-mfa", requireMode("password"), requireUser, requireAdmin, async (c) => {
+      const db = c.get("db");
+      const id = c.req.param("id");
+      // Own factors are changed at /auth/mfa/manage, which asks for proof; another admin resets a locked-out admin.
+      if (id === c.get("user").id) {
+        return apiError(c, 400, "cannot_reset_own_mfa", "自分自身の多要素認証はリセットできません");
+      }
+      if (!(await findUserById(db, id))) return apiError(c, 404, "not_found", userNotFound);
+      // revision 0 is an enrollment that was started but never finished: there are no factors to reset.
+      const account = await db.select({ revision: mfaAccounts.revision }).from(mfaAccounts).where(eq(mfaAccounts.userId, id)).get();
+      if (!account || account.revision === 0) {
+        return apiError(c, 409, "mfa_not_enrolled", "このユーザーは多要素認証を設定していません");
+      }
+      // MCP grants first: if KV fails, D1 is unchanged and the request can be retried. mcp_revoked_at is set with
+      // or without OAUTH_PROVIDER, in the same batch as the sessions.
+      if (c.env.OAUTH_PROVIDER) await revokeAllGrants(c.env.OAUTH_PROVIDER, id);
+      const now = clock.now();
+      const extra = hooks.credentialsRevokedStatements?.({ db, userId: id, now, reason: "admin_mfa_reset" }) ?? [];
+      // The MFA rows are deleted child tables first, without relying on ON DELETE CASCADE: a new enrollment reuses
+      // the same revision, so a leftover passkey or recovery code would be accepted again.
+      await db.batch([
+        db.update(users).set({ mcpRevokedAt: now, updatedAt: now }).where(eq(users.id, id)),
+        revokeUserSessionsQuery(db, id, now),
+        ...extra,
+        db.delete(mfaPending).where(eq(mfaPending.userId, id)),
+        db.delete(mfaRecoveryCodes).where(eq(mfaRecoveryCodes.userId, id)),
+        db.delete(mfaCredentials).where(eq(mfaCredentials.userId, id)),
+        db.delete(mfaAccounts).where(eq(mfaAccounts.userId, id)),
       ]);
       return c.body(null, 204);
     })

@@ -155,6 +155,8 @@ Breaking changes in 0.4.0:
 - `User` has a `status` (`"active"` or `"invited"`). `POST /api/v1/users` answers a `CreateUserResponse` (the `User`
   with an `invitation`).
 - The exported `toApiUser(user, authMode)` takes the auth mode.
+- `CredentialsRevokedReason` has a new member, `"admin_mfa_reset"` (`POST /api/v1/users/:id/reset-mfa`). An exhaustive
+  `switch` on the `reason` of `credentialsRevokedStatements` needs a case for it.
 
 Breaking changes in 0.3.0:
 
@@ -208,8 +210,9 @@ Every hook is optional; without hooks only the package's own statements run.
   revoked. Exceptions are logged and ignored; the grants are still revoked.
 - `credentialsRevokedStatements({ db, userId, now, reason })`: drizzle query builders added to the batch that revokes
   credentials, after the revocation of the sessions. `reason` is `admin_reset` (an admin sets a password),
-  `self_change` (the user changes their password; the statements run before the new session is inserted) or
-  `revoke_sessions`. The MCP grants in KV are revoked before the batch.
+  `self_change` (the user changes their password; the statements run before the new session is inserted),
+  `revoke_sessions` or `admin_mfa_reset` (an admin resets the user's MFA; the statements run before the MFA factors
+  are deleted, so the MFA rows still exist). The MCP grants in KV are revoked before the batch.
 
 ## MCP
 
@@ -304,7 +307,8 @@ Successful authentication, a password change, or an administrator password reset
 A user can still start a fresh flow with a passkey or recovery code while TOTP is waiting.
 
 Users can enroll from the password login or visit `/auth/mfa/manage`. Adding or replacing an enrolled factor
-requires the password and an existing factor or recovery code. The same checks apply when disabling voluntary
+requires the password and an existing factor or recovery code. A user who has lost both their factors and their
+recovery codes needs an admin to reset their MFA (see below). The same checks apply when disabling voluntary
 MFA. Store the single-use recovery codes away from the authenticator. On the recovery form, users can
 choose to replace a lost device. Using the last code starts replacement automatically. The code remains
 valid until registration completes, so users can restart an interrupted registration. To replace a registered
@@ -314,6 +318,32 @@ a factor using a recovery code issues a new set of codes. A password reset prese
 Each fresh password sign-in applies the current policy before issuing a session. Enabling MFA does not revoke
 existing web sessions or MCP grants, and refreshing their tokens does not prompt for a second factor.
 OIDC applications use their identity provider's MFA policy.
+
+An admin resets another user's MFA with `POST /api/v1/users/:id/reset-mfa` (password mode only; 404 in oidc mode).
+It deletes all of the user's factors (passkeys, TOTP and recovery codes) and any MFA flow in progress, revokes their
+web sessions and MCP grants, and keeps their password. It answers 204, 409 `mfa_not_enrolled` for a user without
+MFA, and 400 `cannot_reset_own_mfa` for the requesting admin: admins change their own factors at
+`/auth/mfa/manage`, and another admin resets a locked-out admin. After the reset, a user whom the policy requires to
+use MFA enrolls a new factor at the next password sign-in. **At that point the password alone is enough to enroll,
+so anyone who knows the password could enroll first: confirm the user's identity before resetting, and ask them to
+sign in and enroll right away.** If the password may have leaked with the device (e.g. a stolen device), reset the
+password as well with `POST /api/v1/users/:id/password`. An admin who resets both a user's password and MFA can
+enroll new factors and sign in as that user, so MFA does not protect users against admins.
+
+When the only admin has lost their factors and recovery codes, the deployer deletes the MFA rows in D1 directly,
+child tables first so that the result does not depend on foreign key behavior:
+
+```sh
+wrangler d1 execute <DATABASE> --remote --command "
+DELETE FROM mfa_pending WHERE user_id = (SELECT id FROM users WHERE email = 'admin@example.com');
+DELETE FROM mfa_recovery_codes WHERE user_id = (SELECT id FROM users WHERE email = 'admin@example.com');
+DELETE FROM mfa_credentials WHERE user_id = (SELECT id FROM users WHERE email = 'admin@example.com');
+DELETE FROM mfa_accounts WHERE user_id = (SELECT id FROM users WHERE email = 'admin@example.com');
+"
+```
+
+`users.email` stores the normalized (lowercase) address. This does not revoke sessions or MCP grants; if needed,
+the admin can revoke their own sessions with `POST /api/v1/users/:id/revoke-sessions` after signing in.
 
 An invalid configuration answers every request with 500 without details, and logs the names of the invalid items.
 
@@ -361,9 +391,9 @@ An invalid configuration answers every request with 500 without details, and log
   only once: setting the password consumes it, and so does an admin setting the password. Deleting the user deletes
   it. The token is in the query string, so it may remain in the browser history and in platform request logs (e.g.
   Workers observability); the pages are sent with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
-- `users.mcp_revoked_at` is set when a password changes or an admin revokes a user's sessions. MCP tokens authorized
-  at or before it are rejected, including grants that the revocation in KV missed. Deleting a user also revokes their
-  grants; tokens of deleted users are rejected.
+- `users.mcp_revoked_at` is set when a password changes, an admin revokes a user's sessions or an admin resets a
+  user's MFA. MCP tokens authorized at or before it are rejected, including grants that the revocation in KV missed.
+  Deleting a user also revokes their grants; tokens of deleted users are rejected.
 - POST requests to `/auth/*`, `/api/v1/*` and `/authorize` must be same-origin (`Origin`, or
   `Sec-Fetch-Site: same-origin` without it). Server pages are sent with `Cache-Control: no-store`,
   `Content-Security-Policy: frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`.

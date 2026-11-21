@@ -410,6 +410,15 @@ describe("revoking sessions", () => {
     await expectRevoked(access_token, member.id);
   });
 
+  it("revokes MCP grants with POST /api/v1/users/:id/reset-mfa", async () => {
+    const { access_token } = await authorizeClient(memberCookies);
+    await expectMcpOk(await mcpInitialize(access_token));
+    await env.DB.prepare("INSERT INTO mfa_accounts (user_id, revision) VALUES (?, 1)").bind(member.id).run();
+    const res = await send(`/api/v1/users/${member.id}/reset-mfa`, { method: "POST", cookies: adminCookies });
+    expect(res.status).toBe(204);
+    await expectRevoked(access_token, member.id);
+  });
+
   it("revokes MCP grants when an admin resets the password", async () => {
     const { access_token } = await authorizeClient(memberCookies);
     const res = await send(`/api/v1/users/${member.id}/password`, {
