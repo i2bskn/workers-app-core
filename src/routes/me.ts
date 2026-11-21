@@ -1,14 +1,13 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
 import type { ChangeMyPasswordRequest } from "../api-types.js";
 import type { BrandNames } from "../brand.js";
 import { clock } from "../clock.js";
 import type { CoreBindings } from "../config.js";
-import { users } from "../db/schema.js";
 import { setCookiesForSession } from "../auth/cookies.js";
 import { apiError, type CoreEnv, type CoreMiddleware } from "../auth/middleware.js";
 import { hashPassword, verifyPassword } from "../auth/password.js";
-import { prepareNewSession, revokeUserSessionsQuery } from "../auth/sessions.js";
+import { prepareNewSession } from "../auth/sessions.js";
+import { changePasswordStatements } from "../auth/users.js";
 import { isValidPassword } from "../auth/validate.js";
 import type { CoreHooks } from "../hooks.js";
 import { revokeAllGrants } from "../mcp/grants.js";
@@ -58,8 +57,7 @@ export function createMeRoutes({ names, middleware, hooks }: MeRoutesDeps) {
       // missed because the KV listing lags behind. Order matters: revoke existing sessions before inserting the
       // new one.
       await db.batch([
-        db.update(users).set({ passwordHash, mcpRevokedAt: now, updatedAt: now }).where(eq(users.id, user.id)),
-        revokeUserSessionsQuery(db, user.id, now),
+        ...changePasswordStatements(db, user.id, passwordHash, now),
         ...extra,
         insert,
       ]);

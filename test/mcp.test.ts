@@ -25,6 +25,7 @@ import {
   PASSWORD,
   resetDb,
   send,
+  sessionCookies,
   setCookies,
   testConfig,
   type RequestOptions,
@@ -200,6 +201,15 @@ afterEach(() => {
 });
 
 describe("discovery", () => {
+  it("keeps existing web sessions and MCP grants usable after password MFA becomes required", async () => {
+    const token = await authorizeClient(memberCookies);
+    const env = { PASSWORD_MFA_POLICY: "all", APP_ORIGIN: ORIGIN };
+    await expectMcpOk(await mcpInitialize(token.access_token, { env }));
+    const refreshed = await send("/auth/refresh", { method: "POST", cookies: memberCookies, env });
+    expect(refreshed.status).toBe(204);
+    expect((await send("/api/v1/me", { cookies: sessionCookies(refreshed), env })).status).toBe(200);
+  });
+
   it("answers /mcp without a token with 401 and a challenge", async () => {
     const res = await send("/mcp", { json: { jsonrpc: "2.0", id: 1, method: "tools/list" } });
     expect(res.status).toBe(401);

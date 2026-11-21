@@ -5,6 +5,39 @@ import { oidcEnv } from "./helpers.js";
 
 const HOUR = 60 * 60 * 1000;
 
+describe("password MFA configuration", () => {
+  const load = (settings: Partial<CoreBindings>) => loadConfig({ ...workerEnv, ...settings });
+
+  it("offers voluntary enrollment by default", () => {
+    const result = load({});
+    expect(result.ok && result.config.passwordMfa).toEqual({ policy: "optional", key: null, origin: null });
+  });
+
+  it("requires at least one configured method for enforced enrollment", () => {
+    expect(load({ PASSWORD_MFA_POLICY: "admins" }).ok).toBe(false);
+    expect(load({ PASSWORD_MFA_POLICY: "admins", APP_ORIGIN: "https://wiki.test" }).ok).toBe(true);
+    expect(load({ PASSWORD_MFA_POLICY: "all", PASSWORD_MFA_KEY: btoa("x".repeat(32)) }).ok).toBe(true);
+  });
+
+  it.each(["http://localhost:8787", "https://wiki.test/path"])("keeps existing password deployments usable with %s", (origin) => {
+    const settings = { APP_ORIGIN: origin };
+    const optional = load(settings);
+    expect(optional.ok && optional.config.passwordMfa.origin).toBeNull();
+    expect(load({ ...settings, PASSWORD_MFA_POLICY: "all" }).ok).toBe(false);
+    expect(load({ ...settings, PASSWORD_MFA_POLICY: "all", PASSWORD_MFA_KEY: btoa("x".repeat(32)) }).ok).toBe(true);
+    expect(load({ ...oidcEnv, ...settings }).ok).toBe(false);
+  });
+
+  it("rejects unknown policy or invalid encryption key in password mode only", () => {
+    for (const setting of [
+      { PASSWORD_MFA_POLICY: "sometimes" },
+      { PASSWORD_MFA_POLICY: false as unknown as string },
+      { PASSWORD_MFA_KEY: "short" },
+    ]) expect(load(setting).ok).toBe(false);
+    expect(load({ ...oidcEnv, PASSWORD_MFA_POLICY: "invalid", PASSWORD_MFA_KEY: "unused" }).ok).toBe(true);
+  });
+});
+
 describe("loadConfig session lifetime", () => {
   const load = (overrides: Partial<CoreBindings>) => loadConfig({ ...workerEnv, ...overrides } as CoreBindings);
   const loadOidc = (overrides: Partial<CoreBindings>) =>

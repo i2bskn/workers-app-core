@@ -10,20 +10,23 @@ import {
   getRefreshCookie,
   setCookiesForSession,
   setOidcCookie,
+  setSessionCookies,
 } from "../auth/cookies.js";
 import { parseAllowlist } from "../auth/allowlist.js";
 import { apiError, describeError, type CoreEnv, type CoreMiddleware } from "../auth/middleware.js";
 import { evaluateIdTokenClaims, exchangeCode, startOidcLogin, verifyOidcState } from "../auth/oidc.js";
 import { hashPassword, verifyDummyPassword, verifyPassword } from "../auth/password.js";
+import { issuePasswordOnlySession } from "../auth/mfa-store.js";
 import { safeNext } from "../auth/redirect.js";
 import {
   findSessionById,
   findSessionByTokenHash,
   issueSession,
+  prepareSessionValues,
   revokeFamilyQuery,
   rotateSession,
 } from "../auth/sessions.js";
-import { hashToken, verifyAccessToken } from "../auth/tokens.js";
+import { hashToken, signAccessToken, verifyAccessToken } from "../auth/tokens.js";
 import { countUsers, createInitialAdmin, findUserByEmail, resolveOidcUser } from "../auth/users.js";
 import { isValidPassword, normalizeEmail, normalizeName } from "../auth/validate.js";
 import type { CoreHooks } from "../hooks.js";
@@ -31,6 +34,7 @@ import { ErrorPage } from "../views/error.js";
 import { LoggedOutPage } from "../views/logged-out.js";
 import { LoginPage } from "../views/login.js";
 import { SetupPage } from "../views/setup.js";
+import { createPasswordMfa } from "./mfa.js";
 
 type CoreContext = Context<CoreEnv>;
 
@@ -62,6 +66,33 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
   async function beforeSessionIssued(c: CoreContext, userId: string, now: number): Promise<void> {
     if (hooks.beforeSessionIssued) await hooks.beforeSessionIssued({ env: c.env, db: c.get("db"), userId, now });
   }
+
+  async function prepareSignIn(c: CoreContext, userId: string, setup: boolean) {
+    if (!setup) await beforeSessionIssued(c, userId, clock.now());
+    const now = clock.now();
+    const config = c.get("config");
+    const prepared = await prepareSessionValues(userId, config, now);
+    const { sessionId, refreshToken, expiresAt } = prepared.session;
+    const accessToken = await signAccessToken(names, { sub: userId, sid: sessionId }, config.jwtSecret, now);
+    return {
+      session: prepared,
+      setCookies: () => setSessionCookies(names, c, { accessToken, refreshToken, expiresAt }, now),
+    };
+  }
+
+  async function passwordOnly(c: CoreContext, user: { id: string; passwordHash: string | null }, setup: boolean, next: string) {
+    const prepared = await prepareSignIn(c, user.id, setup);
+    if (!user.passwordHash || !await issuePasswordOnlySession(
+      c.get("db").$client, prepared.session, user.passwordHash, c.get("config").passwordMfa.policy,
+    )) {
+      return c.html(<ErrorPage Layout={Layout} message="認証情報が変更されました。再度ログインしてください。" />, 401);
+    }
+    prepared.setCookies();
+    return c.redirect(next, 303);
+  }
+
+  const mfa = createPasswordMfa({ names, Layout, middleware, prepareSignIn });
+  auth.route("/mfa", mfa.routes);
 
   // HEAD is routed here too; like prefetches, it must not rotate the refresh token.
   auth.get("/login", async (c) => {
@@ -96,7 +127,6 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
   });
 
   auth.post("/login", requireMode("password"), async (c) => {
-    const config = c.get("config");
     const db = c.get("db");
     const body = await c.req.parseBody();
     const emailInput = formString(body.email);
@@ -113,16 +143,16 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
     if (!user || !verified) {
       return c.html(
-        <LoginPage Layout={Layout} next={next} email={emailInput} error="メールアドレスまたはパスワードが違います" />,
+        <LoginPage Layout={Layout} next={next} email={emailInput}
+          manageMfa={body.mfa === "enroll" || body.mfa === "replace" || body.mfa === "disable"}
+          canDisableMfa={c.get("config").passwordMfa.policy !== "all"} error="メールアドレスまたはパスワードが違います" />,
         401,
       );
     }
 
-    const now = clock.now();
-    await beforeSessionIssued(c, user.id, now);
-    const session = await issueSession(db, user.id, config, now);
-    await setCookiesForSession(names, c, session, config.jwtSecret, now);
-    return c.redirect(next, 303);
+    const challenge = await mfa.start(c, user, next, body.mfa, false);
+    if (challenge) return challenge;
+    return passwordOnly(c, user, false, next);
   });
 
   auth.get("/setup", requireMode("password"), async (c) => {
@@ -131,7 +161,6 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
   });
 
   auth.post("/setup", requireMode("password"), async (c) => {
-    const config = c.get("config");
     const db = c.get("db");
     if ((await countUsers(db)) > 0) return c.notFound();
 
@@ -153,6 +182,9 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
 
     const now = clock.now();
+    if (c.get("config").passwordMfa.policy !== "optional" && !mfa.hasMethods(c)) {
+      return c.html(<ErrorPage Layout={Layout} message="このURLで利用できる認証方法がありません。管理者に連絡してください。" />, 503);
+    }
     const user = await createInitialAdmin(
       db,
       { email, name: name.value, passwordHash: await hashPassword(password), now },
@@ -160,9 +192,9 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     );
     if (!user) return c.html(<ErrorPage Layout={Layout} message="すでに初期設定が完了しています" />, 409);
 
-    const session = await issueSession(db, user.id, config, now);
-    await setCookiesForSession(names, c, session, config.jwtSecret, now);
-    return c.redirect("/", 303);
+    const challenge = await mfa.start(c, user, "/", undefined, true);
+    if (challenge) return challenge;
+    return passwordOnly(c, user, true, "/");
   });
 
   auth.get("/oidc/callback", requireMode("oidc"), async (c) => {
@@ -277,6 +309,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
     if (session) await revokeFamilyQuery(db, session.familyId, now).run();
 
+    if (config.authMode === "password") await mfa.cancel(c);
     clearSessionCookies(names, c);
     return c.html(<LoggedOutPage Layout={Layout} />);
   });

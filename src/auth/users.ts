@@ -1,7 +1,8 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { users, type UserRow } from "../db/schema.js";
+import { mfaAccounts, users, type UserRow } from "../db/schema.js";
 import type { CoreHooks } from "../hooks.js";
+import { revokeUserSessionsQuery } from "./sessions.js";
 
 type UserCreatedStatements = CoreHooks<unknown, unknown>["userCreatedStatements"];
 
@@ -28,6 +29,15 @@ export function findUserById(db: Db, id: string): Promise<UserRow | undefined> {
 
 export function findUserByEmail(db: Db, email: string): Promise<UserRow | undefined> {
   return db.select().from(users).where(eq(users.email, email)).get();
+}
+
+// Both password-change routes apply the same credential and session updates in their D1 batch.
+export function changePasswordStatements(db: Db, userId: string, passwordHash: string, now: number) {
+  return [
+    db.update(users).set({ passwordHash, mcpRevokedAt: now, updatedAt: now }).where(eq(users.id, userId)),
+    revokeUserSessionsQuery(db, userId, now),
+    db.update(mfaAccounts).set({ totpAttempts: 0, totpRetryAt: 0 }).where(eq(mfaAccounts.userId, userId)),
+  ] as const;
 }
 
 export async function countUsers(db: Db): Promise<number> {

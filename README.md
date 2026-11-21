@@ -12,7 +12,7 @@ It provides:
 - An OAuth 2.1 authorization server for MCP clients (`@cloudflare/workers-oauth-provider`), with dynamic client
   registration and Client ID Metadata Documents, a consent page, and a stateless MCP endpoint at `/mcp`
   (`@modelcontextprotocol/sdk`).
-- The `users` and `sessions` tables (drizzle-orm), a browser-safe API client helper, and test helpers.
+- Drizzle tables for users, sessions, and password MFA, a browser-safe API client helper, and test helpers.
 
 The server pages and API messages are in Japanese.
 
@@ -22,14 +22,14 @@ The server pages and API messages are in Japanese.
 pnpm add @i2bskn/workers-app-core hono drizzle-orm @cloudflare/workers-oauth-provider @modelcontextprotocol/sdk @cfworker/json-schema openid-client zod
 ```
 
-The listed libraries are peer dependencies, so that the app and the package share one copy of each.
+The app shares its peer dependencies with the core. The core installs its WebAuthn verifier (`@simplewebauthn/server`) and TOTP QR encoder (`uqr`) as runtime dependencies.
 
 ## Entry points
 
 | entry | contents |
 | --- | --- |
 | `@i2bskn/workers-app-core` | `createCore` and the server helpers |
-| `@i2bskn/workers-app-core/schema` | the `users` and `sessions` tables and their row types |
+| `@i2bskn/workers-app-core/schema` | core authentication tables and row types |
 | `@i2bskn/workers-app-core/client` | browser-safe: `createApiFetch`, `responseErrorMessage` and the API types |
 | `@i2bskn/workers-app-core/testing` | `createTestHelpers` for tests with `@cloudflare/vitest-plugin` |
 
@@ -135,7 +135,8 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 
 `issueSession(db, userId, config, now)` takes the `Config` (`c.var.config`) and creates a session of
 `config.authMode`, with the lifetime of `config.session`. `setCookiesForSession(c, session, secret, now)` sets the
-Max-Age of the refresh cookie from `session.expiresAt`.
+Max-Age of the refresh cookie from `session.expiresAt`. Use `core.issueSession` only in trusted server code after
+the caller has authenticated the user and completed any required MFA. For browser sign-in, use the core auth routes.
 
 Breaking changes in 0.2.0:
 
@@ -162,7 +163,7 @@ Every hook is optional; without hooks only the package's own statements run.
   claims. Already linked issuer/subject pairs skip this hook, including when the email changes. Concurrent sign-ins
   can cause a retry: use this hook for checks, and commit one-time effects atomically with the user write.
 - `beforeSessionIssued({ env, db, userId, now })`: called right before a web session is issued or rotated on sign-in:
-  password login (after the password check), the OIDC callback (after the user is resolved), `POST /auth/refresh` and
+  password login (after all required factors), the OIDC callback (after the user is resolved), `POST /auth/refresh` and
   `GET /auth/login` with a valid refresh cookie (after the rotation, before the cookies). Not called on the setup, or
   when a concurrent rotation already won. An exception fails the request with 500 and sets no cookies.
   On the two refresh paths the rotation is already stored when the hook runs, so a failing hook leaves the browser
@@ -208,11 +209,13 @@ props, metadata, revokeExistingGrants })` requires `authorizedAt` and `revokeExi
 
 ## Database
 
-`@i2bskn/workers-app-core/schema` exports `users` and `sessions`. Re-export them from the app's drizzle schema so that
-drizzle-kit includes them in the app's migrations:
+Re-export the core tables from the app's Drizzle schema. Generate and apply the app's schema migration before
+deploying a version that queries the new tables. When upgrading a password-mode app that re-exports only
+`users` and `sessions`, use the export below, run `drizzle-kit generate`, apply the generated migration
+to D1, then deploy the Worker. Password sign-in checks the MFA tables even under the default optional policy.
 
 ```ts
-export { users, sessions, type UserRow, type SessionRow } from "@i2bskn/workers-app-core/schema";
+export * from "@i2bskn/workers-app-core/schema";
 ```
 
 Apps own their migrations; the package ships none. `createDb(d1)` is `drizzle(d1)` without a schema (`db.query.*` is
@@ -226,7 +229,9 @@ Variables and secrets:
 | --- | --- |
 | `JWT_SECRET` | required, at least 32 characters |
 | `AUTH_MODE` | `password` (default) or `oidc` |
-| `APP_ORIGIN` | oidc: the https origin of the app |
+| `APP_ORIGIN` | canonical HTTPS origin of the app. Required for OIDC and for WebAuthn. |
+| `PASSWORD_MFA_POLICY` | password: `optional` (default), `admins`, or `all`. An enrolled account always completes MFA on password login. |
+| `PASSWORD_MFA_KEY` | password: 32 random bytes in standard base64 (generate with `openssl rand -base64 32`). Store as a Worker Secret to enable TOTP. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | oidc |
 | `ALLOWED_EMAILS` | oidc: comma separated emails or domains |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` |
@@ -236,6 +241,31 @@ Variables and secrets:
 `SESSION_MAX_AGE_HOURS` and `SESSION_IDLE_TIMEOUT_HOURS` are whole numbers from 1 to 9600 (400 days), written as
 strings (`"168"`, not `168`, in `vars`); any other value is a configuration error. An idle timeout longer than the
 max age is accepted and has no effect.
+
+### Password MFA
+
+Configure `APP_ORIGIN` to offer WebAuthn passkeys and security keys. Set `PASSWORD_MFA_KEY` to also offer
+authenticator apps (TOTP). Keep this encryption key stable and backed up independently of `JWT_SECRET`.
+Changing it makes existing TOTP secrets unreadable; users can recover with an unused recovery code.
+A required policy needs at least one configured enrollment method. In password mode, an unsupported
+`APP_ORIGIN` disables WebAuthn. When WebAuthn is the only method, open initial setup at the configured origin.
+Each pending sign-in or registration allows five verification attempts. Unsuccessful checks of an already
+registered TOTP also introduce an account-wide delay for that method. After attempts 5, 10,
+15 and 20, the minimum interval increases to 5 minutes, 30 minutes, 4 hours and 24 hours respectively.
+Successful authentication, a password change, or an administrator password reset clears this delay.
+A user can still start a fresh flow with a passkey or recovery code while TOTP is waiting.
+
+Users can enroll from the password login or visit `/auth/mfa/manage`. Adding or replacing an enrolled factor
+requires the password and an existing factor or recovery code. The same checks apply when disabling voluntary
+MFA. Store the single-use recovery codes away from the authenticator. On the recovery form, users can
+choose to replace a lost device. Using the last code starts replacement automatically. The code remains
+valid until registration completes, so users can restart an interrupted registration. To replace a registered
+passkey, use another authenticator or TOTP. The existing credentials work until the replacement is confirmed. Adding or replacing
+a factor using a recovery code issues a new set of codes. A password reset preserves the account's factors.
+`admins` requires enrollment for administrators, and `all` for everyone, including the first admin at setup.
+Each fresh password sign-in applies the current policy before issuing a session. Enabling MFA does not revoke
+existing web sessions or MCP grants, and refreshing their tokens does not prompt for a second factor.
+OIDC applications use their identity provider's MFA policy.
 
 An invalid configuration answers every request with 500 without details, and logs the names of the invalid items.
 

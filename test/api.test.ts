@@ -79,6 +79,35 @@ describe("GET /api/v1/me", () => {
   });
 });
 
+describe("TOTP backoff during credential changes", () => {
+  it.each(["self change", "admin reset", "revoke sessions"] as const)("%s affects only the intended credentials", async action => {
+    const state = { revision: 2, totp_secret: "encrypted", totp_last_step: 123, totp_attempts: 20, totp_retry_at: Date.now() + 86_400_000 };
+    for (const user of [member, admin]) {
+      await env.DB.prepare(`INSERT INTO mfa_accounts
+        (user_id, revision, totp_secret, totp_last_step, totp_attempts, totp_retry_at) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(user.id, state.revision, state.totp_secret, state.totp_last_step, state.totp_attempts, state.totp_retry_at).run();
+    }
+    await env.DB.prepare("INSERT INTO mfa_recovery_codes (user_id, hash) VALUES (?, ?)").bind(member.id, "unused").run();
+
+    let response: Response;
+    if (action === "self change") {
+      response = await send("/api/v1/me/password", {
+        cookies: memberCookies, json: { current_password: PASSWORD, new_password: NEW_PASSWORD },
+      });
+    } else if (action === "admin reset") {
+      response = await send(`/api/v1/users/${member.id}/password`, { cookies: adminCookies, json: { password: NEW_PASSWORD } });
+    } else {
+      response = await send(`/api/v1/users/${member.id}/revoke-sessions`, { method: "POST", cookies: adminCookies });
+    }
+    expect(response.status).toBe(204);
+    const account = (id: string) => env.DB.prepare("SELECT * FROM mfa_accounts WHERE user_id = ?").bind(id).first();
+    const expected = action === "revoke sessions" ? state : { ...state, totp_attempts: 0, totp_retry_at: 0 };
+    expect(await account(member.id)).toEqual({ user_id: member.id, ...expected });
+    expect(await account(admin.id)).toEqual({ user_id: admin.id, ...state });
+    expect(await env.DB.prepare("SELECT hash FROM mfa_recovery_codes WHERE user_id = ?").bind(member.id).first("hash")).toBe("unused");
+  });
+});
+
 describe("POST /api/v1/me/password", () => {
   it("changes the password, revokes other sessions and issues a new one", async () => {
     const otherDevice = await login(member.email);

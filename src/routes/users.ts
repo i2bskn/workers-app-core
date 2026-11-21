@@ -13,7 +13,7 @@ import { users } from "../db/schema.js";
 import { apiError, describeError, type CoreEnv, type CoreMiddleware } from "../auth/middleware.js";
 import { hashPassword } from "../auth/password.js";
 import { revokeUserSessionsQuery } from "../auth/sessions.js";
-import { deleteUser, findUserById, isUserUniqueViolation, runUserInsert } from "../auth/users.js";
+import { changePasswordStatements, deleteUser, findUserById, isUserUniqueViolation, runUserInsert } from "../auth/users.js";
 import { isRole, isValidPassword, normalizeEmail, normalizeName } from "../auth/validate.js";
 import type { CoreHooks } from "../hooks.js";
 import { revokeAllGrants } from "../mcp/grants.js";
@@ -99,8 +99,7 @@ export function createUsersRoutes({ middleware, hooks }: UsersRoutesDeps) {
       // mcp_revoked_at is set with or without OAUTH_PROVIDER: it rejects at /mcp the tokens authorized until now,
       // including grants that revokeAllGrants missed because the KV listing lags behind.
       await db.batch([
-        db.update(users).set({ passwordHash, mcpRevokedAt: now, updatedAt: now }).where(eq(users.id, id)),
-        revokeUserSessionsQuery(db, id, now),
+        ...changePasswordStatements(db, id, passwordHash, now),
         ...extra,
       ]);
       return c.body(null, 204);

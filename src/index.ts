@@ -9,6 +9,7 @@ export {
   type CoreBindings,
   type CoreVariables,
   type OidcConfig,
+  type PasswordMfaConfig,
   type SessionConfig,
 } from "./config.js";
 export { clock } from "./clock.js";

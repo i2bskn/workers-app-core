@@ -386,10 +386,15 @@ describe("credentialsRevokedStatements", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const memberCookies = await login(member.email);
     const cookies = as === "member" ? memberCookies : await login(admin.email);
+    const retryAt = Date.now() + 86_400_000;
+    await env.DB.prepare("INSERT INTO mfa_accounts (user_id, totp_attempts, totp_retry_at) VALUES (?, 20, ?)")
+      .bind(member.id, retryAt).run();
     hooks.credentialsRevokedStatements = failing;
     const res = await send(path.replace(":id", member.id), { method: "POST", cookies, json });
     expect(res.status).toBe(500);
     expect(await mcpRevokedAt(member.id)).toBeNull();
+    expect(await env.DB.prepare("SELECT totp_attempts, totp_retry_at FROM mfa_accounts WHERE user_id = ?")
+      .bind(member.id).first()).toEqual({ totp_attempts: 20, totp_retry_at: retryAt });
     // The sessions are not revoked either.
     expect((await send("/api/v1/me", { cookies: memberCookies })).status).toBe(200);
   });

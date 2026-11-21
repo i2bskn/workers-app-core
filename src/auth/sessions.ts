@@ -27,8 +27,7 @@ export function sessionExpiresAt(
   return Math.min(row.familyExpiresAt, row.createdAt + session.idleTimeoutMs);
 }
 
-export async function prepareNewSession(db: Db, userId: string, config: Config, now: number) {
-  const mode = config.authMode;
+export async function prepareSessionValues(userId: string, config: Config, now: number) {
   const refreshToken = generateRefreshToken();
   const familyExpiresAt = now + config.session.maxAgeMs;
   const session: NewSession = {
@@ -38,16 +37,38 @@ export async function prepareNewSession(db: Db, userId: string, config: Config, 
     familyExpiresAt,
     expiresAt: sessionExpiresAt({ familyExpiresAt, createdAt: now }, config.session),
   };
-  const insert = db.insert(sessions).values({
+  const row = {
     id: session.sessionId,
     userId,
     familyId: crypto.randomUUID(),
-    authMode: mode,
+    authMode: config.authMode,
     tokenHash: await hashToken(refreshToken),
     familyExpiresAt: session.familyExpiresAt,
     createdAt: now,
-  });
-  return { session, insert };
+  };
+  return { session, row };
+}
+
+export type PreparedSession = Awaited<ReturnType<typeof prepareSessionValues>>;
+
+export async function prepareNewSession(db: Db, userId: string, config: Config, now: number) {
+  const { session, row } = await prepareSessionValues(userId, config, now);
+  return { session, insert: db.insert(sessions).values(row) };
+}
+
+// The login timestamp is updated only when that specific session was actually inserted.
+export function guardedSessionStatements(
+  db: D1Database, prepared: PreparedSession, guard: string, guardArgs: (string | number)[],
+) {
+  const { row } = prepared;
+  return [
+    db.prepare(`INSERT INTO sessions (id, user_id, family_id, auth_mode, token_hash, family_expires_at, created_at)
+      SELECT ?, u.id, ?, ?, ?, ?, ? FROM users u WHERE u.id = ? AND ${guard}`)
+      .bind(row.id, row.familyId, row.authMode, row.tokenHash, row.familyExpiresAt, row.createdAt, row.userId, ...guardArgs),
+    db.prepare(`UPDATE users SET last_login_at = ?, updated_at = ?
+      WHERE id = ? AND EXISTS (SELECT 1 FROM sessions WHERE id = ? AND user_id = users.id)`)
+      .bind(row.createdAt, row.createdAt, row.userId, row.id),
+  ];
 }
 
 // Login: insert a new session family and record the login time in one batch.

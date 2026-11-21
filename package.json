@@ -65,5 +65,9 @@
       "esbuild",
       "workerd"
     ]
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "14.1.0",
+    "uqr": "0.1.3"
   }
 }

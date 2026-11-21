@@ -10,6 +10,8 @@ export type CoreBindings = {
   // OAuth (plain http on a non-loopback host), in which case the app is called directly.
   OAUTH_PROVIDER?: OAuthHelpers;
   AUTH_MODE?: string;
+  PASSWORD_MFA_POLICY?: string;
+  PASSWORD_MFA_KEY?: string;
   JWT_SECRET?: string;
   APP_ORIGIN?: string;
   OIDC_ISSUER?: string;
@@ -22,6 +24,12 @@ export type CoreBindings = {
 };
 
 export type AuthMode = "oidc" | "password";
+
+export type PasswordMfaConfig = {
+  policy: "optional" | "admins" | "all";
+  origin: string | null;
+  key: string | null;
+};
 
 export type OidcConfig = {
   appOrigin: string;
@@ -40,6 +48,7 @@ export type Config = {
   authMode: AuthMode;
   jwtSecret: string;
   oidc: OidcConfig | null;
+  passwordMfa: PasswordMfaConfig;
   session: SessionConfig;
 };
 
@@ -110,6 +119,30 @@ export function loadConfig(env: CoreBindings): ConfigResult {
     }
   }
 
+  const passwordMfa: PasswordMfaConfig = { policy: "optional", origin: null, key: null };
+  if (mode === "password") {
+    const policy = env.PASSWORD_MFA_POLICY === undefined || env.PASSWORD_MFA_POLICY === ""
+      ? "optional"
+      : env.PASSWORD_MFA_POLICY;
+    if (policy === "optional" || policy === "admins" || policy === "all") passwordMfa.policy = policy;
+    else invalid.push("PASSWORD_MFA_POLICY");
+    if (env.APP_ORIGIN !== undefined && env.APP_ORIGIN !== "") {
+      // Only a canonical HTTPS origin enables WebAuthn; other password deployments still work.
+      passwordMfa.origin = parseAppOrigin(env.APP_ORIGIN);
+    }
+    if (env.PASSWORD_MFA_KEY !== undefined && env.PASSWORD_MFA_KEY !== "") {
+      // Exactly 32 bytes in standard padded base64 (openssl rand -base64 32).
+      if (typeof env.PASSWORD_MFA_KEY === "string" && /^[A-Za-z0-9+/]{43}=$/.test(env.PASSWORD_MFA_KEY)) {
+        passwordMfa.key = env.PASSWORD_MFA_KEY;
+      } else {
+        invalid.push("PASSWORD_MFA_KEY");
+      }
+    }
+    if (passwordMfa.policy !== "optional" && !passwordMfa.origin && !passwordMfa.key) {
+      invalid.push("APP_ORIGIN or PASSWORD_MFA_KEY");
+    }
+  }
+
   const maxAgeHours = parseSessionHours(env.SESSION_MAX_AGE_HOURS);
   if (maxAgeHours === null) invalid.push("SESSION_MAX_AGE_HOURS");
   const idleTimeoutHours = parseSessionHours(env.SESSION_IDLE_TIMEOUT_HOURS);
@@ -123,7 +156,7 @@ export function loadConfig(env: CoreBindings): ConfigResult {
     maxAgeMs: (maxAgeHours === undefined ? DEFAULT_SESSION_MAX_AGE_HOURS[authMode] : maxAgeHours) * HOUR_MS,
     idleTimeoutMs: idleTimeoutHours === undefined ? null : idleTimeoutHours * HOUR_MS,
   };
-  return { ok: true, config: { authMode, jwtSecret, oidc, session } };
+  return { ok: true, config: { authMode, jwtSecret, oidc, passwordMfa, session } };
 }
 
 // Unset, "" and "true" require email_verified. Only the exact string "false" relaxes it.
