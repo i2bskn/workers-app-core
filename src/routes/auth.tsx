@@ -198,11 +198,13 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     return passwordOnly(c, user, true, "/");
   });
 
-  // Invitation links of password mode. The token is in the URL, so the pages are not cached and send no Referer.
+  // Invitation links of password mode. The token is in the URL, so the pages are not cached and send the Referer only
+  // to the same origin. Not no-referrer: browsers then send "Origin: null" with the form POST, which sameOrigin
+  // rejects, so the password could never be set.
   const invalidInvitation = "招待リンクが無効か、有効期限が切れています。管理者に再発行を依頼してください。";
   auth.use("/invite", requireMode("password"), async (c, next) => {
     c.header("Cache-Control", "no-store");
-    c.header("Referrer-Policy", "no-referrer");
+    c.header("Referrer-Policy", "same-origin");
     await next();
   });
 

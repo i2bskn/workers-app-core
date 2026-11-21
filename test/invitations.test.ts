@@ -135,7 +135,7 @@ describe("GET /auth/invite", () => {
     const created = await invite();
     const res = await openLink(created.token);
     expect(res.status).toBe(200);
-    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     const html = await res.text();
     expect(html).toContain("invited@example.com");
@@ -152,7 +152,7 @@ describe("GET /auth/invite", () => {
     const created = await invite();
     const unknown = await openLink("unknown");
     await expectInvalid(unknown);
-    expect(unknown.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(unknown.headers.get("Referrer-Policy")).toBe("same-origin");
     await expectInvalid(await send("/auth/invite"));
     spy.mockReturnValue(now + INVITATION_TTL_MS - 1);
     expect((await openLink(created.token)).status).toBe(200);
@@ -186,7 +186,7 @@ describe("POST /auth/invite", () => {
     const res = await accept(created.token);
     expect(res.status).toBe(303);
     expect(res.headers.get("Location")).toBe("/");
-    expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
+    expect(res.headers.get("Referrer-Policy")).toBe("same-origin");
     const cookies = sessionCookies(res);
     expect(calls).toEqual([created.id]);
 

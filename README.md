@@ -390,7 +390,9 @@ An invalid configuration answers every request with 500 without details, and log
   stored, the URL is returned only when it is issued, and the token is never logged. A link is valid for 7 days and
   only once: setting the password consumes it, and so does an admin setting the password. Deleting the user deletes
   it. The token is in the query string, so it may remain in the browser history and in platform request logs (e.g.
-  Workers observability); the pages are sent with `Referrer-Policy: no-referrer` and `Cache-Control: no-store`.
+  Workers observability); the pages are sent with `Referrer-Policy: same-origin` (the URL is not sent to other sites;
+  `no-referrer` would make browsers send `Origin: null` with the form, which `sameOrigin` rejects) and
+  `Cache-Control: no-store`.
 - `users.mcp_revoked_at` is set when a password changes, an admin revokes a user's sessions or an admin resets a
   user's MFA. MCP tokens authorized at or before it are rejected, including grants that the revocation in KV missed.
   Deleting a user also revokes their grants; tokens of deleted users are rejected.
