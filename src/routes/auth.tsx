@@ -48,6 +48,24 @@ function formString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+// The longest period of a Rate Limiting binding. The period of LOGIN_RATE_LIMITER is set in the app's wrangler config.
+const LOGIN_RETRY_AFTER_SECONDS = "60";
+
+// Counts a password sign-in attempt for the email address. True when LOGIN_RATE_LIMITER is unset or fails,
+// so that a failing binding does not block sign-ins.
+async function withinLoginRateLimit(c: CoreContext, email: string): Promise<boolean> {
+  const limiter = c.env.LOGIN_RATE_LIMITER;
+  if (!limiter) return true;
+  try {
+    // A hash, so that the key does not contain the email address.
+    const { success } = await limiter.limit({ key: `login:${await hashToken(email)}` });
+    return success !== false;
+  } catch (error) {
+    console.error("login rate limit failed", describeError(error));
+    return true;
+  }
+}
+
 export type AuthRoutesDeps = {
   names: BrandNames;
   Layout: BrandLayout;
@@ -135,6 +153,16 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     const next = safeNext(body.next, nextBaseOrigin(c));
 
     const email = normalizeEmail(emailInput);
+    const manageMfa = body.mfa === "enroll" || body.mfa === "replace" || body.mfa === "disable";
+    const canDisableMfa = c.get("config").passwordMfa.policy !== "all";
+    if (email && !(await withinLoginRateLimit(c, email))) {
+      c.header("Retry-After", LOGIN_RETRY_AFTER_SECONDS);
+      return c.html(
+        <LoginPage Layout={Layout} next={next} email={emailInput} manageMfa={manageMfa} canDisableMfa={canDisableMfa}
+          error="ログインの試行が多すぎます。しばらく待ってからやり直してください" />,
+        429,
+      );
+    }
     const user = email ? await findUserByEmail(db, email) : undefined;
     let verified = false;
     if (user?.passwordHash) {
@@ -144,9 +172,8 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
     if (!user || !verified) {
       return c.html(
-        <LoginPage Layout={Layout} next={next} email={emailInput}
-          manageMfa={body.mfa === "enroll" || body.mfa === "replace" || body.mfa === "disable"}
-          canDisableMfa={c.get("config").passwordMfa.policy !== "all"} error="メールアドレスまたはパスワードが違います" />,
+        <LoginPage Layout={Layout} next={next} email={emailInput} manageMfa={manageMfa} canDisableMfa={canDisableMfa}
+          error="メールアドレスまたはパスワードが違います" />,
         401,
       );
     }

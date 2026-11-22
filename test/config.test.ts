@@ -157,3 +157,23 @@ describe("loadConfig INITIAL_ADMIN_EMAIL", () => {
     }
   });
 });
+
+describe("loadConfig OIDC_ISSUER", () => {
+  const loadOidc = (issuer: string) =>
+    loadConfig({ ...workerEnv, ...oidcEnv, OIDC_ISSUER: issuer } as CoreBindings);
+
+  it.each(["https://idp.example.com", "https://idp.example.com/realms/x"])("accepts the issuer %s as is", (issuer) => {
+    const result = loadOidc(issuer);
+    expect(result.ok && result.config.oidc?.issuer).toBe(issuer);
+  });
+
+  it.each([
+    "https://idp.example.com/.well-known/openid-configuration",
+    "https://idp.example.com/realms/x/.well-known/openid-configuration",
+    "http://idp.example.com",
+  ])("rejects %s", (issuer) => {
+    const result = loadOidc(issuer);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.invalid).toContain("OIDC_ISSUER");
+  });
+});

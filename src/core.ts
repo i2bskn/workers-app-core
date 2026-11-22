@@ -6,7 +6,7 @@ import { loadConfig, type AppEnv, type AuthMode, type Config, type CoreBindings 
 import type { Db } from "./db/client.js";
 import type { CoreHooks } from "./hooks.js";
 import { setCookiesForSession } from "./auth/cookies.js";
-import { createMiddleware, type CurrentUser } from "./auth/middleware.js";
+import { createMiddleware, withDefaultSecurityHeaders, type CurrentUser } from "./auth/middleware.js";
 import { issueSession, type NewSession } from "./auth/sessions.js";
 import { signAccessToken, verifyAccessToken, type AccessTokenClaims } from "./auth/tokens.js";
 import { revokeAllGrants } from "./mcp/grants.js";
@@ -96,22 +96,31 @@ export function createCore<
 
   // The Worker's fetch handler: OAuthProvider on origins that can host OAuth, the app elsewhere.
   function fetch(app: FetchHandler<AppBindings>) {
-    return async (request: Request, env: AppBindings, ctx: ExecutionContext): Promise<Response> => {
-      const result = loadConfig(env);
-      // The app answers with the same 500 as for any other path (loadConfigMiddleware).
-      if (!result.ok) return app.fetch(request, env, ctx);
+    return async (request: Request, env: AppBindings, ctx: ExecutionContext): Promise<Response> =>
+      withDefaultSecurityHeaders(await route(app, request, env, ctx));
+  }
 
-      const url = new URL(request.url);
-      const origin = resolveOrigin(result.config, url);
-      if (origin === null) {
-        if (isOAuthPath(url.pathname)) return new Response(null, { status: 404 });
-        // In oidc mode, unifyHost redirects pages to APP_ORIGIN.
-        return app.fetch(request, env, ctx);
-      }
-      // A shallow copy per request: OAuthProvider sets env.OAUTH_PROVIDER only when it is missing,
-      // so a shared env would keep the helpers of the first origin.
-      return getOAuthProvider(origin, app).fetch(request, { ...env }, ctx);
-    };
+  // Routes a request to OAuthProvider, the app, or a 404.
+  async function route(
+    app: FetchHandler<AppBindings>,
+    request: Request,
+    env: AppBindings,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    const result = loadConfig(env);
+    // The app answers with the same 500 as for any other path (loadConfigMiddleware).
+    if (!result.ok) return app.fetch(request, env, ctx);
+
+    const url = new URL(request.url);
+    const origin = resolveOrigin(result.config, url);
+    if (origin === null) {
+      if (isOAuthPath(url.pathname)) return new Response(null, { status: 404 });
+      // In oidc mode, unifyHost redirects pages to APP_ORIGIN.
+      return app.fetch(request, env, ctx);
+    }
+    // A shallow copy per request: OAuthProvider sets env.OAUTH_PROVIDER only when it is missing,
+    // so a shared env would keep the helpers of the first origin.
+    return getOAuthProvider(origin, app).fetch(request, { ...env }, ctx);
   }
 
   return {

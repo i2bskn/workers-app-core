@@ -138,6 +138,15 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 Max-Age of the refresh cookie from `session.expiresAt`. Use `core.issueSession` only in trusted server code after
 the caller has authenticated the user and completed any required MFA. For browser sign-in, use the core auth routes.
 
+Breaking changes in 0.5.0:
+
+- An `OIDC_ISSUER` that contains `/.well-known/` is a configuration error. Set the issuer itself, not the URL of its
+  discovery document.
+- `core.fetch` adds `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin` to the responses of the
+  Worker (a value the response already has is kept). HTML pages served by the Worker no longer send a Referer to other
+  sites, and browsers no longer load JS, CSS and other files served by the Worker unless their Content-Type is right.
+  A response that needs another value keeps the header that its route sets.
+
 Breaking changes in 0.4.0:
 
 - `ALLOWED_EMAILS` is removed and no longer read (a value left in the environment is ignored, not an error). In oidc
@@ -269,6 +278,21 @@ Variables and secrets:
 | `SESSION_MAX_AGE_HOURS` | absolute lifetime of web sessions from the sign-in, in hours (default 720 in password mode, 24 in oidc mode) |
 | `SESSION_IDLE_TIMEOUT_HOURS` | lifetime of web sessions from the last refresh, in hours (default: none) |
 
+`OIDC_ISSUER` is the issuer itself (e.g. `https://idp.example.com/realms/x`). A URL that contains `/.well-known/`,
+such as the URL of the discovery document, is a configuration error.
+
+Bindings other than `DB` and `OAUTH_KV`:
+
+`LOGIN_RATE_LIMITER` is an optional [Rate Limiting binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+that limits password sign-ins (`POST /auth/login`) per email address. Without it, password sign-in has no rate limit.
+The limit and period are set in `wrangler.jsonc` (requires wrangler 4.36.0 or later):
+
+```jsonc
+"ratelimits": [
+  { "name": "LOGIN_RATE_LIMITER", "namespace_id": "<a positive integer unique in the account>", "simple": { "limit": 5, "period": 60 } }
+]
+```
+
 ### Users
 
 In password mode, the first admin is created on the initial setup page (`/auth/setup`), which is open only while
@@ -397,8 +421,18 @@ An invalid configuration answers every request with 500 without details, and log
   user's MFA. MCP tokens authorized at or before it are rejected, including grants that the revocation in KV missed.
   Deleting a user also revokes their grants; tokens of deleted users are rejected.
 - POST requests to `/auth/*`, `/api/v1/*` and `/authorize` must be same-origin (`Origin`, or
-  `Sec-Fetch-Site: same-origin` without it). Server pages are sent with `Cache-Control: no-store`,
-  `Content-Security-Policy: frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`.
+  `Sec-Fetch-Site: same-origin` without it). Server pages are sent with `Cache-Control: no-store` and
+  `Content-Security-Policy: frame-ancestors 'none'`.
+- `core.fetch` adds `X-Content-Type-Options: nosniff` and `Referrer-Policy: same-origin` to every response of the
+  Worker, including those of OAuthProvider, unless the response already has them. Static assets that do not go
+  through the Worker (paths outside `run_worker_first`) do not get them: set the headers of assets in the app, e.g. in
+  `_headers`. HSTS and redirects from HTTP to HTTPS are set in the zone settings.
+- With `LOGIN_RATE_LIMITER`, each password sign-in counts against a key made from the SHA-256 hash of the normalized
+  email address, before the password is checked; the client IP address is not used. Cloudflare counts per location,
+  so the limit is approximate. Over the limit, the login page is answered with 429 and `Retry-After: 60`, without
+  checking the password. If the binding fails, sign-in continues without a limit. Accepted risks: someone who knows an
+  email address can keep its password sign-in at 429 by sending attempts over the limit, and trying one password
+  against many accounts (password spraying) is not limited.
 - Passwords are hashed with PBKDF2-SHA256 (100,000 iterations) and must be 12 to 256 characters.
 
 ## Testing helpers

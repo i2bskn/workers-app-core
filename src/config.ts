@@ -22,6 +22,13 @@ export type CoreBindings = {
   OIDC_REQUIRE_EMAIL_VERIFIED?: string;
   SESSION_MAX_AGE_HOURS?: string;
   SESSION_IDLE_TIMEOUT_HOURS?: string;
+  // Optional Rate Limiting binding that limits POST /auth/login per email address.
+  LOGIN_RATE_LIMITER?: LoginRateLimiter;
+};
+
+// The part of a Workers Rate Limiting binding that the package uses. A RateLimit binding can be assigned to it.
+export type LoginRateLimiter = {
+  limit(options: { key: string }): Promise<{ success: boolean }>;
 };
 
 export type AuthMode = "oidc" | "password";
@@ -101,7 +108,7 @@ export function loadConfig(env: CoreBindings): ConfigResult {
   if (mode === "oidc") {
     const appOrigin = parseAppOrigin(env.APP_ORIGIN);
     if (appOrigin === null) invalid.push("APP_ORIGIN");
-    const issuer = parseHttpsUrl(env.OIDC_ISSUER);
+    const issuer = parseOidcIssuer(env.OIDC_ISSUER);
     if (issuer === null) invalid.push("OIDC_ISSUER");
     const clientId = env.OIDC_CLIENT_ID ?? "";
     if (clientId === "") invalid.push("OIDC_CLIENT_ID");
@@ -204,11 +211,13 @@ function parseAppOrigin(value: string | undefined): string | null {
   return url.origin;
 }
 
-function parseHttpsUrl(value: string | undefined): string | null {
+// An https URL that is not a discovery document: openid-client does not check the issuer of such a URL.
+function parseOidcIssuer(value: string | undefined): string | null {
   if (!value) return null;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" ? value : null;
+    if (url.protocol !== "https:") return null;
+    return url.href.includes("/.well-known/") ? null : value;
   } catch {
     return null;
   }

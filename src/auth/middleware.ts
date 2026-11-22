@@ -45,6 +45,23 @@ export function apiError<E extends Env, S extends ContentfulStatusCode>(
   return c.json(body, status);
 }
 
+// Headers that core.fetch adds to every response of the Worker, including those of OAuthProvider,
+// which do not go through the Hono middleware. A value set by a route is kept.
+const DEFAULT_SECURITY_HEADERS: ReadonlyArray<readonly [string, string]> = [
+  ["X-Content-Type-Options", "nosniff"],
+  ["Referrer-Policy", "same-origin"],
+];
+
+export function withDefaultSecurityHeaders(response: Response): Response {
+  // A copy would lose the WebSocket of an upgrade response.
+  if (response.status === 101 || response.webSocket) return response;
+  const copy = new Response(response.body, response);
+  for (const [name, value] of DEFAULT_SECURITY_HEADERS) {
+    if (!copy.headers.has(name)) copy.headers.set(name, value);
+  }
+  return copy;
+}
+
 export type CurrentUser = { user: UserRow; sessionId: string };
 
 export type MiddlewareDeps = {

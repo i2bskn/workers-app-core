@@ -8,6 +8,7 @@ export {
   type ConfigResult,
   type CoreBindings,
   type CoreVariables,
+  type LoginRateLimiter,
   type OidcConfig,
   type PasswordMfaConfig,
   type SessionConfig,
