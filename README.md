@@ -142,8 +142,8 @@ Breaking changes in 0.6.0:
 
 - New password hashes use scrypt instead of PBKDF2 by default (see `PASSWORD_HASH_ALGORITHM`). The package imports
   `node:crypto`, so every app needs a compatibility date of 2026-08-04 or later (or the `nodejs_compat` flag), even
-  with `PASSWORD_HASH_ALGORITHM=pbkdf2`. On the Free plan, set `PASSWORD_HASH_ALGORITHM=pbkdf2`: scrypt does not fit
-  in its CPU time.
+  with `PASSWORD_HASH_ALGORITHM=pbkdf2`. scrypt takes about 150 to 200 ms of CPU time per hash, over the 10 ms of
+  the Free plan (see Configuration).
 - Existing PBKDF2 hashes keep working and are not recomputed. In a deployment with existing users, the response time
   of a sign-in can reveal which email addresses are registered until their passwords are set again (see
   Configuration).
@@ -346,19 +346,21 @@ max age is accepted and has no effect.
 `PASSWORD_HASH_ALGORITHM` is `scrypt` (the default) or `pbkdf2`, exactly; any other value is a configuration error,
 in either auth mode. scrypt uses `scrypt` of `node:crypto`, which needs a compatibility date of 2026-08-04 or later
 (or the `nodejs_compat` flag; see `wrangler.jsonc` below). Its parameters are fixed at N=2^13, r=8, p=10 (one of the
-OWASP recommendations, 8 MiB of memory), and one hash takes about 150 ms of CPU time on Workers (measured in
-2026-11). That does not fit in the 10 ms of CPU time per request of the Free plan: on the Free plan, use
-`PASSWORD_HASH_ALGORITHM=pbkdf2` from the start. Switching from scrypt to `pbkdf2` later does not help existing
-users: their scrypt hashes still take about 150 ms to verify, so on the Free plan they may be unable to sign in until
-their passwords are set again.
+OWASP recommendations, 8 MiB of memory), and one hash takes about 150 to 200 ms of CPU time on Workers (measured in
+2026-11 on the Paid and the Free plans).
+
+The Free plan allows 10 ms of CPU time per request. Both scrypt and PBKDF2 with 100,000 iterations (about 17 to 56
+ms) exceed it, yet in a measurement in 2026-11 neither was cut off on the Free plan, even at about 560 ms. Cloudflare
+does not guarantee this. If sign-ins fail on the CPU time limit, use `PASSWORD_HASH_ALGORITHM=pbkdf2` with fewer
+`PASSWORD_PBKDF2_ITERATIONS`, or the Paid plan. Switching from scrypt to `pbkdf2` does not lighten existing users:
+their scrypt hashes take the same CPU time to verify until their passwords are set again.
 
 `PASSWORD_PBKDF2_ITERATIONS` is a whole number from 10000 to 100000, written as a string (`"50000"`, not `50000`, in
 `vars`); any other value is a configuration error, in either auth mode and with either algorithm. It is used only
 with `PASSWORD_HASH_ALGORITHM=pbkdf2`. OWASP recommends 600,000 iterations for PBKDF2-SHA256, but the Web Crypto API
 of Cloudflare Workers rejects PBKDF2 above 100,000 iterations in production, on every plan (local `wrangler dev`
 accepts it, so a higher count would fail only after deploying). The maximum and the default are therefore 100,000.
-The Free plan allows 10 ms of CPU time per request, which 100,000 iterations can exceed: on the Free plan, consider a
-lower value, measured in your own deployment.
+A lower count takes less CPU time (see the Free plan above).
 
 Changing the algorithm or the iterations applies only to hashes created afterwards: the initial setup, a user created
 with a password, an admin password reset, a password change and a password set from an invitation link. Existing
