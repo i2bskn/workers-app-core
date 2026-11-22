@@ -169,7 +169,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     if (user?.passwordHash) {
       verified = await verifyPassword(password, user.passwordHash);
     } else {
-      await verifyDummyPassword(password, c.get("config").passwordIterations);
+      await verifyDummyPassword(password, c.get("config").passwordHash);
     }
     if (!user || !verified) {
       return c.html(
@@ -216,7 +216,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
     const user = await createInitialAdmin(
       db,
-      { email, name: name.value, passwordHash: await hashPassword(password, c.get("config").passwordIterations), now },
+      { email, name: name.value, passwordHash: await hashPassword(password, c.get("config").passwordHash), now },
       hooks.userCreatedStatements,
     );
     if (!user) return c.html(<ErrorPage Layout={Layout} message="すでに初期設定が完了しています" />, 409);
@@ -268,7 +268,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
       return c.html(<ErrorPage Layout={Layout} message="このURLで利用できる認証方法がありません。管理者に連絡してください。" />, 503);
     }
 
-    const passwordHash = await hashPassword(password, c.get("config").passwordIterations);
+    const passwordHash = await hashPassword(password, c.get("config").passwordHash);
     const accepted = await acceptInvitation(db.$client, {
       userId: invitation.userId,
       tokenHash: invitation.tokenHash,

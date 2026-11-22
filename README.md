@@ -138,6 +138,19 @@ Members of the returned core are bound to the brand: `routes.auth`, `routes.auth
 Max-Age of the refresh cookie from `session.expiresAt`. Use `core.issueSession` only in trusted server code after
 the caller has authenticated the user and completed any required MFA. For browser sign-in, use the core auth routes.
 
+Breaking changes in 0.6.0:
+
+- New password hashes use scrypt instead of PBKDF2 by default (see `PASSWORD_HASH_ALGORITHM`). The package imports
+  `node:crypto`, so every app needs a compatibility date of 2026-08-04 or later (or the `nodejs_compat` flag), even
+  with `PASSWORD_HASH_ALGORITHM=pbkdf2`. On the Free plan, set `PASSWORD_HASH_ALGORITHM=pbkdf2`: scrypt does not fit
+  in its CPU time.
+- Existing PBKDF2 hashes keep working and are not recomputed. In a deployment with existing users, the response time
+  of a sign-in can reveal which email addresses are registered until their passwords are set again (see
+  Configuration).
+- `Config` has a new required field, `passwordHash` (`PasswordHashConfig`).
+- `createUser` of the testing helpers creates scrypt hashes by default, which can make an app's tests slower. Pass
+  `hashConfig: { algorithm: "pbkdf2", iterations: 100000 }` to create a PBKDF2 hash instead.
+
 Breaking changes in 0.5.0:
 
 - An `OIDC_ISSUER` that contains `/.well-known/` is a configuration error. Set the issuer itself, not the URL of its
@@ -273,7 +286,8 @@ Variables and secrets:
 | `APP_ORIGIN` | canonical HTTPS origin of the app. Required for OIDC and for WebAuthn. |
 | `PASSWORD_MFA_POLICY` | password: `optional` (default), `admins`, or `all`. An enrolled account always completes MFA on password login. |
 | `PASSWORD_MFA_KEY` | password: 32 random bytes in standard base64 (generate with `openssl rand -base64 32`). Store as a Worker Secret to enable TOTP. |
-| `PASSWORD_PBKDF2_ITERATIONS` | password: PBKDF2-SHA256 iterations of new password hashes, from 10,000 to 100,000 (default 100,000; see below) |
+| `PASSWORD_HASH_ALGORITHM` | password: algorithm of new password hashes, `scrypt` (default) or `pbkdf2` (see below) |
+| `PASSWORD_PBKDF2_ITERATIONS` | password: PBKDF2-SHA256 iterations of new password hashes with `PASSWORD_HASH_ALGORITHM=pbkdf2`, from 10,000 to 100,000 (default 100,000; see below). Validated with `scrypt` too: an invalid value is a configuration error. |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | oidc |
 | `INITIAL_ADMIN_EMAIL` | oidc: while there are no users, the first sign-in with this email creates the first admin. Ignored once a user exists. |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` (see below) |
@@ -329,20 +343,32 @@ other value rejects the linking and the creation of the first admin with 403 and
 strings (`"168"`, not `168`, in `vars`); any other value is a configuration error. An idle timeout longer than the
 max age is accepted and has no effect.
 
-`PASSWORD_PBKDF2_ITERATIONS` is a whole number from 10000 to 100000, written as a string (`"50000"`, not `50000`, in
-`vars`); any other value is a configuration error, in either auth mode. OWASP recommends 600,000 iterations for
-PBKDF2-SHA256, but the Web Crypto API of Cloudflare Workers rejects PBKDF2 above 100,000 iterations in production, on
-every plan (local `wrangler dev` accepts it, so a higher count would fail only after deploying). The maximum and the
-default are therefore 100,000. The Free plan allows 10 ms of CPU time per request, which 100,000 iterations can
-exceed: on the Free plan, consider a lower value, measured in your own deployment.
+`PASSWORD_HASH_ALGORITHM` is `scrypt` (the default) or `pbkdf2`, exactly; any other value is a configuration error,
+in either auth mode. scrypt uses `scrypt` of `node:crypto`, which needs a compatibility date of 2026-08-04 or later
+(or the `nodejs_compat` flag; see `wrangler.jsonc` below). Its parameters are fixed at N=2^13, r=8, p=10 (one of the
+OWASP recommendations, 8 MiB of memory), and one hash takes about 150 ms of CPU time on Workers (measured in
+2026-11). That does not fit in the 10 ms of CPU time per request of the Free plan: on the Free plan, use
+`PASSWORD_HASH_ALGORITHM=pbkdf2` from the start. Switching from scrypt to `pbkdf2` later does not help existing
+users: their scrypt hashes still take about 150 ms to verify, so on the Free plan they may be unable to sign in until
+their passwords are set again.
 
-Changing the value applies only to hashes created afterwards: the initial setup, a user created with a password, an
-admin password reset, a password change and a password set from an invitation link. Existing hashes are not
-recomputed, on sign-in or otherwise, and keep their own count, so lowering the value does not reduce the CPU time of
-existing users' sign-ins until their passwords are set again. Sign-ins of unknown emails and of users without a
-password run a dummy verification with the configured count. While existing hashes use another count, the response
-time differs between them: after lowering the value, the response time of a sign-in can reveal which email addresses
-are registered until the existing hashes are recreated.
+`PASSWORD_PBKDF2_ITERATIONS` is a whole number from 10000 to 100000, written as a string (`"50000"`, not `50000`, in
+`vars`); any other value is a configuration error, in either auth mode and with either algorithm. It is used only
+with `PASSWORD_HASH_ALGORITHM=pbkdf2`. OWASP recommends 600,000 iterations for PBKDF2-SHA256, but the Web Crypto API
+of Cloudflare Workers rejects PBKDF2 above 100,000 iterations in production, on every plan (local `wrangler dev`
+accepts it, so a higher count would fail only after deploying). The maximum and the default are therefore 100,000.
+The Free plan allows 10 ms of CPU time per request, which 100,000 iterations can exceed: on the Free plan, consider a
+lower value, measured in your own deployment.
+
+Changing the algorithm or the iterations applies only to hashes created afterwards: the initial setup, a user created
+with a password, an admin password reset, a password change and a password set from an invitation link. Existing
+hashes are not recomputed, on sign-in or otherwise: each hash is verified with the algorithm and parameters stored in
+it, so existing users keep signing in after a switch, and their sign-ins keep the CPU time of their own hashes until
+their passwords are set again. Sign-ins of unknown emails and of users without a password run a dummy verification
+with the configured algorithm and iterations. Accepted risk: while existing hashes use another algorithm or other
+parameters, the response time differs between them, and the response time of a sign-in can reveal which email
+addresses are registered. To avoid it, set the passwords of existing users again, or keep the setting of the existing
+hashes (e.g. `PASSWORD_HASH_ALGORITHM=pbkdf2` for a deployment whose users have PBKDF2 hashes).
 
 ### Password MFA
 
@@ -404,6 +430,9 @@ rest of the app keeps working.
 
 ```jsonc
 {
+  // 2026-08-04 or later, which enables node:crypto (used for password hashing). With an earlier date, add
+  // "nodejs_compat" to compatibility_flags.
+  "compatibility_date": "2026-08-04",
   // Required for Client ID Metadata Documents: fetches of client metadata must not reach internal addresses.
   "compatibility_flags": ["global_fetch_strictly_public"],
   "assets": {
@@ -462,9 +491,13 @@ rest of the app keeps working.
   checking the password. If the binding fails, sign-in continues without a limit. Accepted risks: someone who knows an
   email address can keep its password sign-in at 429 by sending attempts over the limit, and trying one password
   against many accounts (password spraying) is not limited.
-- Passwords are hashed with PBKDF2-SHA256 (100,000 iterations by default; see `PASSWORD_PBKDF2_ITERATIONS`) and must
-  be 12 to 256 characters. Accepted risk: while `PASSWORD_PBKDF2_ITERATIONS` differs from the count of existing
-  hashes, the response time of a password sign-in can reveal whether an email address is registered.
+- Passwords are hashed with scrypt (N=2^13, r=8, p=10) by default, or with PBKDF2-SHA256 (100,000 iterations by
+  default) with `PASSWORD_HASH_ALGORITHM=pbkdf2`, and must be 12 to 256 characters. Accepted risk: while
+  `PASSWORD_HASH_ALGORITHM` or `PASSWORD_PBKDF2_ITERATIONS` differs from the setting of existing hashes, the response
+  time of a password sign-in can reveal whether an email address is registered (see Configuration).
+- A sign-in with an unknown email runs a dummy verification that takes the same CPU time as a real one (about 150 ms
+  with scrypt). `LOGIN_RATE_LIMITER` limits per email address, so attempts that change the email address each time
+  are not limited and add CPU time. The same holds with PBKDF2, with less CPU time per attempt.
 
 ## Browser client
 
@@ -539,6 +572,10 @@ export const { send, login, createUser, resetDb, sessionCookies } = createTestHe
   origin: "https://myapp.test",
 });
 ```
+
+`createUser({ email, role, password, hashConfig })` hashes the password with scrypt, like the default configuration.
+scrypt is slow by design, so tests that create many users take longer; `hashConfig: { algorithm: "pbkdf2",
+iterations: 100000 }` creates a PBKDF2 hash instead.
 
 `resetDb(appTables)` deletes the given tables (children first), then `sessions`, `user_invitations` and `users`. Also: `setCookies`,
 `dbChangingBefore`, `d1With`, `d1RecordingLargeBinds`, `countTable`, and the constants `PASSWORD`, `TEST_JWT_SECRET`

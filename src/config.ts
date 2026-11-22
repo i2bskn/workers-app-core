@@ -1,7 +1,12 @@
 import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import type { Db } from "./db/client.js";
 import type { UserRow } from "./db/schema.js";
-import { DEFAULT_PBKDF2_ITERATIONS, MAX_PBKDF2_ITERATIONS, MIN_PBKDF2_ITERATIONS } from "./auth/password.js";
+import {
+  DEFAULT_PBKDF2_ITERATIONS,
+  MAX_PBKDF2_ITERATIONS,
+  MIN_PBKDF2_ITERATIONS,
+  type PasswordHashConfig,
+} from "./auth/password.js";
 import { normalizeEmail } from "./auth/validate.js";
 
 // The bindings the package reads. Apps extend this type with their own.
@@ -25,6 +30,7 @@ export type CoreBindings = {
   OIDC_REQUIRE_GOOGLE_HD?: string;
   SESSION_MAX_AGE_HOURS?: string;
   SESSION_IDLE_TIMEOUT_HOURS?: string;
+  PASSWORD_HASH_ALGORITHM?: string;
   PASSWORD_PBKDF2_ITERATIONS?: string;
   // Optional Rate Limiting binding that limits POST /auth/login per email address.
   LOGIN_RATE_LIMITER?: LoginRateLimiter;
@@ -36,6 +42,8 @@ export type LoginRateLimiter = {
 };
 
 export type AuthMode = "oidc" | "password";
+
+export type { PasswordHashConfig };
 
 export type PasswordMfaConfig = {
   policy: "optional" | "admins" | "all";
@@ -63,8 +71,8 @@ export type Config = {
   oidc: OidcConfig | null;
   passwordMfa: PasswordMfaConfig;
   session: SessionConfig;
-  // The PBKDF2 iterations of new password hashes. Existing hashes keep their own count.
-  passwordIterations: number;
+  // The algorithm of new password hashes. Existing hashes keep their own algorithm and parameters.
+  passwordHash: PasswordHashConfig;
 };
 
 // The variables set by the package's middleware. user and sessionId are set by requireUser.
@@ -165,11 +173,20 @@ export function loadConfig(env: CoreBindings): ConfigResult {
   const idleTimeoutHours = parseSessionHours(env.SESSION_IDLE_TIMEOUT_HOURS);
   if (idleTimeoutHours === null) invalid.push("SESSION_IDLE_TIMEOUT_HOURS");
 
-  // Parsed in every auth mode, so that switching the mode does not reveal an invalid value.
+  // Parsed in every auth mode, so that switching the mode does not reveal an invalid value. The iterations are
+  // parsed with scrypt too, so that switching the algorithm does not reveal an invalid value either.
+  const hashAlgorithm = parsePasswordHashAlgorithm(env.PASSWORD_HASH_ALGORITHM);
+  if (hashAlgorithm === null) invalid.push("PASSWORD_HASH_ALGORITHM");
   const passwordIterations = parsePbkdf2Iterations(env.PASSWORD_PBKDF2_ITERATIONS);
   if (passwordIterations === null) invalid.push("PASSWORD_PBKDF2_ITERATIONS");
 
-  if (invalid.length > 0 || maxAgeHours === null || idleTimeoutHours === null || passwordIterations === null) {
+  if (
+    invalid.length > 0 ||
+    maxAgeHours === null ||
+    idleTimeoutHours === null ||
+    hashAlgorithm === null ||
+    passwordIterations === null
+  ) {
     return { ok: false, invalid };
   }
   const authMode = mode as AuthMode;
@@ -177,7 +194,9 @@ export function loadConfig(env: CoreBindings): ConfigResult {
     maxAgeMs: (maxAgeHours === undefined ? DEFAULT_SESSION_MAX_AGE_HOURS[authMode] : maxAgeHours) * HOUR_MS,
     idleTimeoutMs: idleTimeoutHours === undefined ? null : idleTimeoutHours * HOUR_MS,
   };
-  return { ok: true, config: { authMode, jwtSecret, oidc, passwordMfa, session, passwordIterations } };
+  const passwordHash: PasswordHashConfig =
+    hashAlgorithm === "pbkdf2" ? { algorithm: "pbkdf2", iterations: passwordIterations } : { algorithm: "scrypt" };
+  return { ok: true, config: { authMode, jwtSecret, oidc, passwordMfa, session, passwordHash } };
 }
 
 // Unset, "" and "true" require email_verified. Only the exact string "false" relaxes it.
@@ -206,6 +225,13 @@ function parseSessionHours(value: unknown): number | undefined | null {
   if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) return null;
   const hours = Number(value);
   return hours <= MAX_SESSION_HOURS ? hours : null;
+}
+
+// Unset and "" mean scrypt. Only the exact strings "scrypt" and "pbkdf2" are accepted. Any other value (including
+// non-string values from JSON variables) is a configuration error (null).
+function parsePasswordHashAlgorithm(value: unknown): PasswordHashConfig["algorithm"] | null {
+  if (value === undefined || value === "") return "scrypt";
+  return value === "scrypt" || value === "pbkdf2" ? value : null;
 }
 
 // Unset and "" mean DEFAULT_PBKDF2_ITERATIONS. A whole number from MIN_PBKDF2_ITERATIONS to MAX_PBKDF2_ITERATIONS,

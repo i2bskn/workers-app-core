@@ -190,9 +190,12 @@ describe("loadConfig PASSWORD_PBKDF2_ITERATIONS", () => {
     ["50000", 50000],
     ["100000", 100000],
   ])("accepts %j as %i iterations", (value, iterations) => {
-    const result = load({ PASSWORD_PBKDF2_ITERATIONS: value });
+    const result = load({ PASSWORD_HASH_ALGORITHM: "pbkdf2", PASSWORD_PBKDF2_ITERATIONS: value });
     expect(result.ok).toBe(true);
-    expect(result.ok && result.config.passwordIterations).toBe(iterations);
+    expect(result.ok && result.config.passwordHash).toEqual({ algorithm: "pbkdf2", iterations });
+    // Validated but unused with scrypt.
+    const scrypt = load({ PASSWORD_PBKDF2_ITERATIONS: value });
+    expect(scrypt.ok && scrypt.config.passwordHash).toEqual({ algorithm: "scrypt" });
   });
 
   const invalidValues: [unknown][] = [
@@ -210,14 +213,53 @@ describe("loadConfig PASSWORD_PBKDF2_ITERATIONS", () => {
   ];
 
   it.each(invalidValues)("rejects %j", (value) => {
-    const result = load({ PASSWORD_PBKDF2_ITERATIONS: value as string });
-    expect(result.ok).toBe(false);
-    expect(!result.ok && result.invalid).toContain("PASSWORD_PBKDF2_ITERATIONS");
+    for (const algorithm of [undefined, "scrypt", "pbkdf2"]) {
+      const result = load({ PASSWORD_HASH_ALGORITHM: algorithm, PASSWORD_PBKDF2_ITERATIONS: value as string });
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.invalid).toEqual(["PASSWORD_PBKDF2_ITERATIONS"]);
+    }
   });
 
   it("rejects an invalid value in oidc mode", () => {
     const result = loadOidc({ PASSWORD_PBKDF2_ITERATIONS: "600000" });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.invalid).toEqual(["PASSWORD_PBKDF2_ITERATIONS"]);
+  });
+});
+
+describe("loadConfig PASSWORD_HASH_ALGORITHM", () => {
+  const load = (overrides: Partial<CoreBindings>) => loadConfig({ ...workerEnv, ...overrides } as CoreBindings);
+  const loadOidc = (overrides: Partial<CoreBindings>) =>
+    loadConfig({ ...workerEnv, ...oidcEnv, ...overrides } as CoreBindings);
+
+  it.each([undefined, "", "scrypt"])("accepts %j as scrypt", (value) => {
+    const result = load({ PASSWORD_HASH_ALGORITHM: value });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.passwordHash).toEqual({ algorithm: "scrypt" });
+  });
+
+  it("accepts pbkdf2 with the default iterations", () => {
+    const result = load({ PASSWORD_HASH_ALGORITHM: "pbkdf2" });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.passwordHash).toEqual({ algorithm: "pbkdf2", iterations: 100000 });
+  });
+
+  it("accepts pbkdf2 with the configured iterations", () => {
+    const result = load({ PASSWORD_HASH_ALGORITHM: "pbkdf2", PASSWORD_PBKDF2_ITERATIONS: "50000" });
+    expect(result.ok && result.config.passwordHash).toEqual({ algorithm: "pbkdf2", iterations: 50000 });
+  });
+
+  const invalidValues: [unknown][] = [["argon2"], ["SCRYPT"], ["PBKDF2"], [" scrypt"], ["scrypt "], [1], [true]];
+
+  it.each(invalidValues)("rejects %j", (value) => {
+    const result = load({ PASSWORD_HASH_ALGORITHM: value as string });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.invalid).toEqual(["PASSWORD_HASH_ALGORITHM"]);
+  });
+
+  it("rejects an invalid value in oidc mode", () => {
+    const result = loadOidc({ PASSWORD_HASH_ALGORITHM: "argon2" });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.invalid).toEqual(["PASSWORD_HASH_ALGORITHM"]);
   });
 });

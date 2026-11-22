@@ -1,7 +1,7 @@
 // Helpers for the tests of an app built with createCore. Imports nothing from cloudflare:test, cloudflare:workers
 // or the app: everything is passed in.
 import { eq } from "drizzle-orm";
-import { DEFAULT_PBKDF2_ITERATIONS, hashPassword } from "../auth/password.js";
+import { hashPassword, type PasswordHashConfig } from "../auth/password.js";
 import type { CoreBindings } from "../config.js";
 import { createDb, type Db } from "../db/client.js";
 import { users, type UserRow } from "../db/schema.js";
@@ -54,6 +54,8 @@ export type CreateUserParams = {
   email: string;
   role?: "admin" | "member";
   password?: string | null;
+  // The algorithm of the password hash. Defaults to scrypt, like the default configuration; PBKDF2 is faster.
+  hashConfig?: PasswordHashConfig;
   createdAt?: number;
   // Run in the same batch as the INSERT, like the app's userCreatedStatements hook.
   userCreatedStatements?: (d1: D1Database, userId: string, now: number) => D1PreparedStatement[];
@@ -126,7 +128,7 @@ export function createTestHelpers<TestEnv extends CoreBindings, Id extends strin
   async function createUser(params: CreateUserParams): Promise<UserRow> {
     const now = params.createdAt ?? Date.now();
     const password = params.password === undefined ? PASSWORD : params.password;
-    const passwordHash = password === null ? null : await hashPassword(password, DEFAULT_PBKDF2_ITERATIONS);
+    const passwordHash = password === null ? null : await hashPassword(password, params.hashConfig ?? { algorithm: "scrypt" });
     const id = crypto.randomUUID();
     const role = params.role ?? "member";
     const extra = params.userCreatedStatements?.(env.DB, id, now) ?? [];

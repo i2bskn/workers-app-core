@@ -75,6 +75,24 @@ describe("password MFA through the Worker", () => {
     sessionCookies(await send("/auth/login", { env: optional, form: loginForm }));
   });
 
+  it("proceeds to MFA for a user with a PBKDF2 hash under the default scrypt configuration", async () => {
+    const user = await createUser({ email, hashConfig: { algorithm: "pbkdf2", iterations: 100000 } });
+    expect(user.passwordHash).toMatch(/^pbkdf2_sha256\$/);
+    const authenticator = await createTestAuthenticator(ORIGIN);
+    const loginForm = { email, password: PASSWORD };
+    const enrollment = pendingCookies(await send("/auth/login", { env: optional, form: { ...loginForm, mfa: "enroll" } }));
+    const options = await send("/auth/mfa/webauthn/options", { env: optional, cookies: enrollment, json: {} });
+    const registration = await authenticator.register((await options.json<{ challenge: string }>()).challenge);
+    const confirmed = await send("/auth/mfa/webauthn/verify", {
+      env: optional, cookies: enrollment, form: { response: JSON.stringify(registration) },
+    });
+    expect(confirmed.status).toBe(200);
+
+    const pending = await send("/auth/login", { env: optional, form: loginForm });
+    expect(pending.status).toBe(303);
+    pendingCookies(pending);
+  });
+
   it("limits first-admin setup to enrollment, then verifies TOTP or a single-use recovery code", async () => {
     let now = Date.now();
     vi.spyOn(clock, "now").mockImplementation(() => now);

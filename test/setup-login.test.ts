@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import nodeCrypto from "node:crypto";
+import { eq } from "drizzle-orm";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { countUsers, createInitialAdmin } from "../src/auth/users.js";
 import { users } from "../src/db/schema.js";
 import {
@@ -13,6 +15,9 @@ import {
 } from "./helpers.js";
 
 beforeEach(resetDb);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const setupForm = {
   email: "Admin@Example.com",
@@ -41,8 +46,18 @@ describe("initial setup", () => {
     expect(all[0]?.lastLoginAt).not.toBeNull();
   });
 
+  it("hashes the password with scrypt by default", async () => {
+    expect((await send("/auth/setup", { form: setupForm })).status).toBe(303);
+    const [admin] = await db.select().from(users).all();
+    expect(admin?.passwordHash).toMatch(/^scrypt\$8192\$8\$10\$/);
+
+    const res = await send("/auth/login", { form: { email: "admin@example.com", password: PASSWORD } });
+    expect(res.status).toBe(303);
+    sessionCookies(res);
+  });
+
   it("hashes the password with the configured iterations", async () => {
-    const env = { PASSWORD_PBKDF2_ITERATIONS: "50000" };
+    const env = { PASSWORD_HASH_ALGORITHM: "pbkdf2", PASSWORD_PBKDF2_ITERATIONS: "50000" };
     expect((await send("/auth/setup", { form: setupForm, env })).status).toBe(303);
     const [admin] = await db.select().from(users).all();
     expect(admin?.passwordHash).toMatch(/^pbkdf2_sha256\$50000\$/);
@@ -169,14 +184,66 @@ describe("password login", () => {
   });
 
   it("signs in a user hashed with the default iterations after the iterations are lowered", async () => {
-    const [alice] = await db.select().from(users).all();
-    expect(alice?.passwordHash).toMatch(/^pbkdf2_sha256\$100000\$/);
+    const bob = await createUser({ email: "bob@example.com", hashConfig: { algorithm: "pbkdf2", iterations: 100000 } });
+    expect(bob.passwordHash).toMatch(/^pbkdf2_sha256\$100000\$/);
     const res = await send("/auth/login", {
-      form: { email: "alice@example.com", password: PASSWORD },
-      env: { PASSWORD_PBKDF2_ITERATIONS: "50000" },
+      form: { email: "bob@example.com", password: PASSWORD },
+      env: { PASSWORD_HASH_ALGORITHM: "pbkdf2", PASSWORD_PBKDF2_ITERATIONS: "50000" },
     });
     expect(res.status).toBe(303);
     sessionCookies(res);
+  });
+
+  it("signs in a user with a PBKDF2 hash under the default scrypt configuration without rehashing", async () => {
+    const bob = await createUser({ email: "bob@example.com", hashConfig: { algorithm: "pbkdf2", iterations: 100000 } });
+    expect(bob.passwordHash).toMatch(/^pbkdf2_sha256\$/);
+    const res = await send("/auth/login", { form: { email: "bob@example.com", password: PASSWORD } });
+    expect(res.status).toBe(303);
+    sessionCookies(res);
+    const wrong = await send("/auth/login", { form: { email: "bob@example.com", password: "wrong password!" } });
+    expect(wrong.status).toBe(401);
+    const [row] = await db.select().from(users).where(eq(users.id, bob.id)).all();
+    expect(row?.passwordHash).toBe(bob.passwordHash);
+  });
+
+  it("signs in a user with a scrypt hash when PASSWORD_HASH_ALGORITHM is pbkdf2 without rehashing", async () => {
+    const [alice] = await db.select().from(users).all();
+    expect(alice?.passwordHash).toMatch(/^scrypt\$/);
+    const env = { PASSWORD_HASH_ALGORITHM: "pbkdf2" };
+    const res = await send("/auth/login", { form: { email: "alice@example.com", password: PASSWORD }, env });
+    expect(res.status).toBe(303);
+    sessionCookies(res);
+    const [row] = await db.select().from(users).all();
+    expect(row?.passwordHash).toBe(alice?.passwordHash);
+  });
+
+  it("runs the dummy verification with the configured algorithm for an unknown email", async () => {
+    const scrypt = vi.spyOn(nodeCrypto, "scrypt");
+    const deriveBits = vi.spyOn(crypto.subtle, "deriveBits");
+    const form = { email: "nobody@example.com", password: PASSWORD };
+    expect((await send("/auth/login", { form })).status).toBe(401);
+    expect(scrypt).toHaveBeenCalledTimes(1);
+    expect(deriveBits).not.toHaveBeenCalled();
+
+    scrypt.mockClear();
+    expect((await send("/auth/login", { form, env: { PASSWORD_HASH_ALGORITHM: "pbkdf2" } })).status).toBe(401);
+    expect(scrypt).not.toHaveBeenCalled();
+    expect(deriveBits).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 401 without computing for a corrupted scrypt hash", async () => {
+    const [alice] = await db.select().from(users).all();
+    const corrupted = alice?.passwordHash?.replace(/^scrypt\$8192\$/, `scrypt$${2 ** 20}$`);
+    await db.update(users).set({ passwordHash: corrupted }).where(eq(users.id, alice?.id ?? ""));
+    const scrypt = vi.spyOn(nodeCrypto, "scrypt");
+    const res = await send("/auth/login", { form: { email: "alice@example.com", password: PASSWORD } });
+    expect(res.status).toBe(401);
+    expect(scrypt).not.toHaveBeenCalled();
+  });
+
+  it("returns 500 when PASSWORD_HASH_ALGORITHM is invalid", async () => {
+    const res = await send("/auth/login", { env: { PASSWORD_HASH_ALGORITHM: "argon2" } });
+    expect(res.status).toBe(500);
   });
 
   it("returns 500 when PASSWORD_PBKDF2_ITERATIONS is invalid", async () => {

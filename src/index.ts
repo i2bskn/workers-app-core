@@ -10,6 +10,7 @@ export {
   type CoreVariables,
   type LoginRateLimiter,
   type OidcConfig,
+  type PasswordHashConfig,
   type PasswordMfaConfig,
   type SessionConfig,
 } from "./config.js";
