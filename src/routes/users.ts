@@ -85,7 +85,7 @@ export function createUsersRoutes({ middleware, hooks }: UsersRoutesDeps) {
       const input = c.req.valid("json");
       const db = c.get("db");
       const authMode = c.get("config").authMode;
-      const passwordHash = input.password === null ? null : await hashPassword(input.password);
+      const passwordHash = input.password === null ? null : await hashPassword(input.password, c.get("config").passwordIterations);
       const now = clock.now();
       const id = crypto.randomUUID();
       const d1 = db.$client;
@@ -138,7 +138,7 @@ export function createUsersRoutes({ middleware, hooks }: UsersRoutesDeps) {
       // MCP grants first: if KV fails, D1 is unchanged and the request can be retried.
       // OAUTH_PROVIDER is absent only on origins that cannot issue grants.
       if (c.env.OAUTH_PROVIDER) await revokeAllGrants(c.env.OAUTH_PROVIDER, id);
-      const passwordHash = await hashPassword(input.password);
+      const passwordHash = await hashPassword(input.password, c.get("config").passwordIterations);
       // Taken after hashing, right before the batch, so that mcp_revoked_at covers the grants authorized meanwhile.
       const now = clock.now();
       const extra = hooks.credentialsRevokedStatements?.({ db, userId: id, now, reason: "admin_reset" }) ?? [];

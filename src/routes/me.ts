@@ -48,7 +48,7 @@ export function createMeRoutes({ names, middleware, hooks }: MeRoutesDeps) {
       if (c.env.OAUTH_PROVIDER) await revokeAllGrants(c.env.OAUTH_PROVIDER, user.id);
       const db = c.get("db");
       const config = c.get("config");
-      const passwordHash = await hashPassword(input.new_password);
+      const passwordHash = await hashPassword(input.new_password, config.passwordIterations);
       // Taken after hashing, right before the batch, so that mcp_revoked_at covers the grants authorized meanwhile.
       const now = clock.now();
       const { session, insert } = await prepareNewSession(db, user.id, config, now);

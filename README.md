@@ -273,6 +273,7 @@ Variables and secrets:
 | `APP_ORIGIN` | canonical HTTPS origin of the app. Required for OIDC and for WebAuthn. |
 | `PASSWORD_MFA_POLICY` | password: `optional` (default), `admins`, or `all`. An enrolled account always completes MFA on password login. |
 | `PASSWORD_MFA_KEY` | password: 32 random bytes in standard base64 (generate with `openssl rand -base64 32`). Store as a Worker Secret to enable TOTP. |
+| `PASSWORD_PBKDF2_ITERATIONS` | password: PBKDF2-SHA256 iterations of new password hashes, from 10,000 to 100,000 (default 100,000; see below) |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | oidc |
 | `INITIAL_ADMIN_EMAIL` | oidc: while there are no users, the first sign-in with this email creates the first admin. Ignored once a user exists. |
 | `OIDC_REQUIRE_EMAIL_VERIFIED` | oidc: `false` accepts ID tokens without `email_verified` (see below) |
@@ -327,6 +328,21 @@ other value rejects the linking and the creation of the first admin with 403 and
 `SESSION_MAX_AGE_HOURS` and `SESSION_IDLE_TIMEOUT_HOURS` are whole numbers from 1 to 9600 (400 days), written as
 strings (`"168"`, not `168`, in `vars`); any other value is a configuration error. An idle timeout longer than the
 max age is accepted and has no effect.
+
+`PASSWORD_PBKDF2_ITERATIONS` is a whole number from 10000 to 100000, written as a string (`"50000"`, not `50000`, in
+`vars`); any other value is a configuration error, in either auth mode. OWASP recommends 600,000 iterations for
+PBKDF2-SHA256, but the Web Crypto API of Cloudflare Workers rejects PBKDF2 above 100,000 iterations in production, on
+every plan (local `wrangler dev` accepts it, so a higher count would fail only after deploying). The maximum and the
+default are therefore 100,000. The Free plan allows 10 ms of CPU time per request, which 100,000 iterations can
+exceed: on the Free plan, consider a lower value, measured in your own deployment.
+
+Changing the value applies only to hashes created afterwards: the initial setup, a user created with a password, an
+admin password reset, a password change and a password set from an invitation link. Existing hashes are not
+recomputed, on sign-in or otherwise, and keep their own count, so lowering the value does not reduce the CPU time of
+existing users' sign-ins until their passwords are set again. Sign-ins of unknown emails and of users without a
+password run a dummy verification with the configured count. While existing hashes use another count, the response
+time differs between them: after lowering the value, the response time of a sign-in can reveal which email addresses
+are registered until the existing hashes are recreated.
 
 ### Password MFA
 
@@ -446,7 +462,9 @@ rest of the app keeps working.
   checking the password. If the binding fails, sign-in continues without a limit. Accepted risks: someone who knows an
   email address can keep its password sign-in at 429 by sending attempts over the limit, and trying one password
   against many accounts (password spraying) is not limited.
-- Passwords are hashed with PBKDF2-SHA256 (100,000 iterations) and must be 12 to 256 characters.
+- Passwords are hashed with PBKDF2-SHA256 (100,000 iterations by default; see `PASSWORD_PBKDF2_ITERATIONS`) and must
+  be 12 to 256 characters. Accepted risk: while `PASSWORD_PBKDF2_ITERATIONS` differs from the count of existing
+  hashes, the response time of a password sign-in can reveal whether an email address is registered.
 
 ## Browser client
 

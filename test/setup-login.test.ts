@@ -41,6 +41,17 @@ describe("initial setup", () => {
     expect(all[0]?.lastLoginAt).not.toBeNull();
   });
 
+  it("hashes the password with the configured iterations", async () => {
+    const env = { PASSWORD_PBKDF2_ITERATIONS: "50000" };
+    expect((await send("/auth/setup", { form: setupForm, env })).status).toBe(303);
+    const [admin] = await db.select().from(users).all();
+    expect(admin?.passwordHash).toMatch(/^pbkdf2_sha256\$50000\$/);
+
+    const res = await send("/auth/login", { form: { email: "admin@example.com", password: PASSWORD }, env });
+    expect(res.status).toBe(303);
+    sessionCookies(res);
+  });
+
   it("returns 404 once a user exists", async () => {
     expect((await send("/auth/setup", { form: setupForm })).status).toBe(303);
     expect((await send("/auth/setup")).status).toBe(404);
@@ -155,6 +166,22 @@ describe("password login", () => {
     expect(await res.text()).not.toContain("short");
     expect((await send("/api/v1/me", { env: { AUTH_MODE: "ldap" } })).status).toBe(500);
     expect((await send("/", { env: { AUTH_MODE: "oidc" } })).status).toBe(500);
+  });
+
+  it("signs in a user hashed with the default iterations after the iterations are lowered", async () => {
+    const [alice] = await db.select().from(users).all();
+    expect(alice?.passwordHash).toMatch(/^pbkdf2_sha256\$100000\$/);
+    const res = await send("/auth/login", {
+      form: { email: "alice@example.com", password: PASSWORD },
+      env: { PASSWORD_PBKDF2_ITERATIONS: "50000" },
+    });
+    expect(res.status).toBe(303);
+    sessionCookies(res);
+  });
+
+  it("returns 500 when PASSWORD_PBKDF2_ITERATIONS is invalid", async () => {
+    const res = await send("/auth/login", { env: { PASSWORD_PBKDF2_ITERATIONS: "600000" } });
+    expect(res.status).toBe(500);
   });
 
   it("returns 500 when OIDC_REQUIRE_EMAIL_VERIFIED is invalid", async () => {

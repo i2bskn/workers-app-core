@@ -1,7 +1,7 @@
 // Helpers for the tests of an app built with createCore. Imports nothing from cloudflare:test, cloudflare:workers
 // or the app: everything is passed in.
 import { eq } from "drizzle-orm";
-import { hashPassword } from "../auth/password.js";
+import { DEFAULT_PBKDF2_ITERATIONS, hashPassword } from "../auth/password.js";
 import type { CoreBindings } from "../config.js";
 import { createDb, type Db } from "../db/client.js";
 import { users, type UserRow } from "../db/schema.js";
@@ -126,7 +126,7 @@ export function createTestHelpers<TestEnv extends CoreBindings, Id extends strin
   async function createUser(params: CreateUserParams): Promise<UserRow> {
     const now = params.createdAt ?? Date.now();
     const password = params.password === undefined ? PASSWORD : params.password;
-    const passwordHash = password === null ? null : await hashPassword(password);
+    const passwordHash = password === null ? null : await hashPassword(password, DEFAULT_PBKDF2_ITERATIONS);
     const id = crypto.randomUUID();
     const role = params.role ?? "member";
     const extra = params.userCreatedStatements?.(env.DB, id, now) ?? [];

@@ -177,3 +177,47 @@ describe("loadConfig OIDC_ISSUER", () => {
     expect(!result.ok && result.invalid).toContain("OIDC_ISSUER");
   });
 });
+
+describe("loadConfig PASSWORD_PBKDF2_ITERATIONS", () => {
+  const load = (overrides: Partial<CoreBindings>) => loadConfig({ ...workerEnv, ...overrides } as CoreBindings);
+  const loadOidc = (overrides: Partial<CoreBindings>) =>
+    loadConfig({ ...workerEnv, ...oidcEnv, ...overrides } as CoreBindings);
+
+  it.each([
+    [undefined, 100000],
+    ["", 100000],
+    ["10000", 10000],
+    ["50000", 50000],
+    ["100000", 100000],
+  ])("accepts %j as %i iterations", (value, iterations) => {
+    const result = load({ PASSWORD_PBKDF2_ITERATIONS: value });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.config.passwordIterations).toBe(iterations);
+  });
+
+  const invalidValues: [unknown][] = [
+    ["9999"],
+    ["100001"],
+    ["600000"],
+    ["0"],
+    ["-1"],
+    ["050000"],
+    [" 50000"],
+    ["1e5"],
+    ["100_000"],
+    [50000],
+    [true],
+  ];
+
+  it.each(invalidValues)("rejects %j", (value) => {
+    const result = load({ PASSWORD_PBKDF2_ITERATIONS: value as string });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.invalid).toContain("PASSWORD_PBKDF2_ITERATIONS");
+  });
+
+  it("rejects an invalid value in oidc mode", () => {
+    const result = loadOidc({ PASSWORD_PBKDF2_ITERATIONS: "600000" });
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.invalid).toEqual(["PASSWORD_PBKDF2_ITERATIONS"]);
+  });
+});
