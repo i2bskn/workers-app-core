@@ -20,6 +20,8 @@ export type CoreBindings = {
   OIDC_CLIENT_SECRET?: string;
   INITIAL_ADMIN_EMAIL?: string;
   OIDC_REQUIRE_EMAIL_VERIFIED?: string;
+  // Read by /auth/oidc/callback on each first association, not by loadConfig (see src/auth/google-hd.ts).
+  OIDC_REQUIRE_GOOGLE_HD?: string;
   SESSION_MAX_AGE_HOURS?: string;
   SESSION_IDLE_TIMEOUT_HOURS?: string;
   // Optional Rate Limiting binding that limits POST /auth/login per email address.

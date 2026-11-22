@@ -566,6 +566,116 @@ describe("OIDC flow with a mocked IdP", () => {
     expect(await db.select().from(sessions).all()).toHaveLength(0);
   });
 
+  describe("OIDC_REQUIRE_GOOGLE_HD", () => {
+    const requireHd: Partial<CoreBindings> = { ...oidcEnv, OIDC_REQUIRE_GOOGLE_HD: "true" };
+    const requireHdAdmin: Partial<CoreBindings> = { ...adminEnv, OIDC_REQUIRE_GOOGLE_HD: "true" };
+
+    async function invite() {
+      await createUser({ email: "bob@example.com", role: "admin" });
+      return createUser({ email: "alice@example.com", role: "member", password: null });
+    }
+
+    it("returns 403 without linking an invited user whose token has no hd", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const invited = await invite();
+      const res = await loginWith(requireHd);
+      expect(res.status).toBe(403);
+      expect(await res.text()).toContain("このアカウントではログインできません");
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: null });
+      expect(await db.select().from(sessions).all()).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "google_hd_missing", hd: "undefined" });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("alice@example.com");
+    });
+
+    it.each([[""], ["  "], [true]])("returns 403 for an invited user with hd %j", async (hd) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const invited = await invite();
+      idTokenClaims = { ...idTokenClaims, hd };
+      expect((await loginWith(requireHd)).status).toBe(403);
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: null });
+      expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "google_hd_missing", hd: typeof hd });
+    });
+
+    it("links an invited user whose token has hd", async () => {
+      const invited = await invite();
+      idTokenClaims = { ...idTokenClaims, hd: "example.com" };
+      expect((await loginWith(requireHd)).status).toBe(303);
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: "sub-1" });
+    });
+
+    it("creates the first admin with a Gmail address without hd", async () => {
+      idTokenClaims = { ...idTokenClaims, email: "alice@gmail.com" };
+      const res = await loginWith({ ...requireHdAdmin, INITIAL_ADMIN_EMAIL: "alice@gmail.com" });
+      expect(res.status).toBe(303);
+      expect(await db.select().from(users).all()).toMatchObject([{ email: "alice@gmail.com", role: "admin" }]);
+    });
+
+    it("does not create the first admin without hd", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect((await loginWith(requireHdAdmin)).status).toBe(403);
+      expect(await db.select().from(users).all()).toHaveLength(0);
+      expect(await db.select().from(sessions).all()).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "google_hd_missing", hd: "undefined" });
+    });
+
+    it("does not call beforeOidcUserLinkOrCreate when hd is missing", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(true);
+      hooks.beforeOidcUserLinkOrCreate = check;
+      await invite();
+      expect((await loginWith(requireHd)).status).toBe(403);
+      expect(check).not.toHaveBeenCalled();
+    });
+
+    it("still applies beforeOidcUserLinkOrCreate after the hd check passes", async () => {
+      const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(false);
+      hooks.beforeOidcUserLinkOrCreate = check;
+      const invited = await invite();
+      idTokenClaims = { ...idTokenClaims, hd: "example.com" };
+      expect((await loginWith(requireHd)).status).toBe(403);
+      expect(check).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ operation: "link" }));
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: null });
+    });
+
+    it("does not check hd when unset", async () => {
+      const invited = await invite();
+      expect((await loginWith(oidcEnv)).status).toBe(303);
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: "sub-1" });
+    });
+
+    it("rejects only the first association for an invalid value and calls no hook", async () => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const check = vi.fn<NonNullable<typeof hooks.beforeOidcUserLinkOrCreate>>().mockResolvedValue(true);
+      hooks.beforeOidcUserLinkOrCreate = check;
+      const invited = await invite();
+      idTokenClaims = { ...idTokenClaims, hd: "example.com" };
+      const res = await loginWith({ ...oidcEnv, OIDC_REQUIRE_GOOGLE_HD: "TRUE" });
+      expect(res.status).toBe(403);
+      expect(error).toHaveBeenCalledWith("invalid configuration", { invalid: ["OIDC_REQUIRE_GOOGLE_HD"] });
+      expect(check).not.toHaveBeenCalled();
+      expect(await db.select().from(users).where(eq(users.id, invited.id)).get()).toMatchObject({ oidcSubject: null });
+      expect(await db.select().from(sessions).all()).toHaveLength(0);
+    });
+
+    it("signs in a linked user with an invalid value", async () => {
+      expect((await loginWith(adminEnv)).status).toBe(303);
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const res = await loginWith({ ...adminEnv, OIDC_REQUIRE_GOOGLE_HD: " true" });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("Location")).toBe("/wiki");
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it("returns 403 not_invited for an uninvited email with an invalid value", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      await createUser({ email: "bob@example.com", role: "admin" });
+      expect((await loginWith({ ...oidcEnv, OIDC_REQUIRE_GOOGLE_HD: "1" })).status).toBe(403);
+      expect(warn).toHaveBeenCalledWith("oidc login rejected", { reason: "not_invited" });
+      expect(error).not.toHaveBeenCalled();
+    });
+  });
+
   it("calls beforeSessionIssued with the resolved user before the session is issued", async () => {
     const calls: string[] = [];
     hooks.beforeSessionIssued = async ({ userId }) => {

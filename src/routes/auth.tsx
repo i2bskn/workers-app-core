@@ -12,6 +12,7 @@ import {
   setOidcCookie,
   setSessionCookies,
 } from "../auth/cookies.js";
+import { parseGoogleHdSetting, passesGoogleHd } from "../auth/google-hd.js";
 import { acceptInvitation, findValidInvitation } from "../auth/invitations.js";
 import { apiError, describeError, type CoreEnv, type CoreMiddleware } from "../auth/middleware.js";
 import { evaluateIdTokenClaims, exchangeCode, startOidcLogin, verifyOidcState } from "../auth/oidc.js";
@@ -335,6 +336,23 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
     }
 
     const beforeWrite = hooks.beforeOidcUserLinkOrCreate;
+    // Called only for the first association (linking an invited user or creating the first admin). The Google hd
+    // check runs before the app's hook, which is not called when the check rejects.
+    const allowWrite = async (operation: "link" | "create"): Promise<boolean> => {
+      const googleHd = parseGoogleHdSetting(c.env.OIDC_REQUIRE_GOOGLE_HD);
+      if (googleHd === "invalid") {
+        // Only the first association is rejected (403); the rest of the app keeps working.
+        console.error("invalid configuration", { invalid: ["OIDC_REQUIRE_GOOGLE_HD"] });
+        return false;
+      }
+      if (googleHd === "on" && !passesGoogleHd(evaluated.email, claims)) {
+        // Log only the type of hd. Never log the email or claim values.
+        console.warn("oidc login rejected", { reason: "google_hd_missing", hd: typeof claims.hd });
+        return false;
+      }
+      if (!beforeWrite) return true;
+      return beforeWrite({ operation, env: c.env, db, issuer: iss, subject: sub, email: evaluated.email, claims });
+    };
     const resolved = await resolveOidcUser(
       db,
       { issuer: iss, subject: sub, email: evaluated.email, name: evaluated.name },
@@ -342,9 +360,7 @@ export function createAuthRoutes({ names, Layout, middleware, hooks }: AuthRoute
       {
         initialAdminEmail: oidc.initialAdminEmail,
         userCreatedStatements: hooks.userCreatedStatements,
-        allowWrite: beforeWrite
-          ? (operation) => beforeWrite({ operation, env: c.env, db, issuer: iss, subject: sub, email: evaluated.email, claims })
-          : undefined,
+        allowWrite,
       },
     );
     if (!resolved.ok) {
