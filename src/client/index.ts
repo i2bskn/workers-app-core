@@ -1,7 +1,15 @@
 // Browser-safe: imports no server module. Types only from the API types.
 import type { ApiError } from "../api-types.js";
 
-export type { ApiError, User, UserList } from "../api-types.js";
+export type {
+  ApiError,
+  CreateUserRequest,
+  CreateUserResponse,
+  Invitation,
+  User,
+  UserList,
+} from "../api-types.js";
+export * from "./users.js";
 
 // Login is required and the move to the login page has started.
 export class LoginRequiredError extends Error {
