@@ -1,0 +1,353 @@
+---
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+// The docs are built from docs/, so the package manifest is one level up.
+const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "../package.json"), "utf8")) as {
+  version: string;
+  license: string;
+};
+
+const features = [
+  {
+    title: "Web sign-in",
+    body: "Email and password, or an OpenID Connect provider (<code>AUTH_MODE=oidc</code>), with rotating refresh tokens stored in D1.",
+    href: `${base}/guides/configuration/`,
+    link: "Configuration",
+  },
+  {
+    title: "Users and invitations",
+    body: "The initial setup page that creates the first admin, invitation links for password mode, and a JSON API to manage users. In oidc mode, only users registered by an admin can sign in.",
+    href: `${base}/guides/users/`,
+    link: "Users",
+  },
+  {
+    title: "MCP authorization",
+    body: "An OAuth 2.1 authorization server with dynamic client registration and Client ID Metadata Documents, a consent page, and a stateless MCP endpoint at <code>/mcp</code>.",
+    href: `${base}/guides/mcp/`,
+    link: "MCP",
+  },
+  {
+    title: "MFA in password mode",
+    body: "Passkeys and security keys with WebAuthn, authenticator apps with TOTP, recovery codes, and a policy for admins or everyone.",
+    href: `${base}/guides/password-mfa/`,
+    link: "Password MFA",
+  },
+];
+
+const entries = [
+  { path: "@i2bskn/workers-app-core", body: "<code>createCore</code> and the server helpers." },
+  { path: "@i2bskn/workers-app-core/schema", body: "The core authentication tables and row types." },
+  {
+    path: "@i2bskn/workers-app-core/client",
+    body: "Browser-safe: <code>createApiFetch</code>, <code>responseErrorMessage</code>, the user management API functions and the API types.",
+  },
+  {
+    path: "@i2bskn/workers-app-core/testing",
+    body: "<code>createTestHelpers</code> for tests with <code>@cloudflare/vitest-plugin</code>.",
+  },
+];
+
+const next = [
+  { n: "01", title: "Installation", href: `${base}/getting-started/installation/` },
+  { n: "02", title: "Usage", href: `${base}/getting-started/usage/` },
+  { n: "03", title: "Configuration", href: `${base}/guides/configuration/` },
+  { n: "04", title: "Security behaviors", href: `${base}/reference/security/` },
+];
+---
+
+<section class="gh-sec not-content" aria-labelledby="gh-feat-title">
+  <p class="gh-kicker">What it provides</p>
+  <h2 id="gh-feat-title">The parts every app needs before its first feature</h2>
+  <ul class="gh-feat">
+    {
+      features.map((f, i) => (
+        <li>
+          <span class="gh-feat-n" aria-hidden="true">
+            {String(i + 1).padStart(2, "0")}
+          </span>
+          <h3>{f.title}</h3>
+          <p set:html={f.body} />
+          <a href={f.href}>
+            {f.link}
+            <span class="sr-only"> guide</span>
+          </a>
+        </li>
+      ))
+    }
+  </ul>
+  <p class="gh-note">
+    Also: Drizzle tables for users, sessions and password MFA, a browser-safe API client, and test helpers.
+  </p>
+</section>
+
+<section class="gh-sec not-content" aria-labelledby="gh-entry-title">
+  <p class="gh-kicker">Entry points</p>
+  <h2 id="gh-entry-title">Four imports</h2>
+  <dl class="gh-entries">
+    {
+      entries.map((e) => (
+        <div>
+          <dt>
+            <code>{e.path}</code>
+          </dt>
+          <dd set:html={e.body} />
+        </div>
+      ))
+    }
+  </dl>
+</section>
+
+<nav class="gh-sec gh-next not-content" aria-labelledby="gh-next-title">
+  <p class="gh-kicker">Start here</p>
+  <h2 id="gh-next-title">Read in this order</h2>
+  <ol>
+    {
+      next.map((s) => (
+        <li>
+          <a href={s.href}>
+            <span class="gh-next-n">{s.n}</span>
+            <span class="gh-next-t">{s.title}</span>
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </a>
+        </li>
+      ))
+    }
+  </ol>
+</nav>
+
+<footer class="gh-foot not-content">
+  <span class="gh-foot-name">@i2bskn/workers-app-core <span>v{pkg.version}</span></span>
+  <ul>
+    <li><a href="https://github.com/i2bskn/workers-app-core">GitHub</a></li>
+    <li><a href="https://www.npmjs.com/package/@i2bskn/workers-app-core">npm</a></li>
+    <li><a href="https://github.com/i2bskn/workers-app-core/blob/main/LICENSE">{pkg.license} License</a></li>
+  </ul>
+</footer>
+
+<style>
+  .gh-sec {
+    padding-block: 4rem 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+  .gh-kicker {
+    margin: 0 0 0.75rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gh-accent-text);
+  }
+  h2 {
+    max-width: 36rem;
+    margin: 0;
+    font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.5rem);
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--sl-color-white);
+    text-wrap: balance;
+  }
+
+  .gh-feat {
+    display: grid;
+    gap: 1px;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-line);
+    overflow: clip;
+  }
+  @media (min-width: 40rem) {
+    .gh-feat {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 72rem) {
+    .gh-feat {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .gh-feat li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    padding: 1.5rem 1.4rem 1.4rem;
+    background: var(--sl-color-black);
+  }
+  .gh-feat-n {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--gh-accent-text);
+  }
+  .gh-feat h3 {
+    margin: 0.25rem 0 0;
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--sl-color-white);
+  }
+  .gh-feat p {
+    flex: 1;
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+  }
+  .gh-feat p :global(code) {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-1);
+  }
+  .gh-feat a {
+    align-self: flex-start;
+    margin-top: 0.5rem;
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-white);
+    text-decoration: underline;
+    text-decoration-color: var(--sl-color-accent);
+    text-underline-offset: 0.25em;
+  }
+  .gh-feat a:hover {
+    color: var(--gh-accent-text);
+  }
+  .gh-note {
+    margin: 1.25rem 0 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+
+  .gh-entries {
+    display: grid;
+    margin: 2.5rem 0 0;
+    border-top: 1px solid var(--gh-line);
+  }
+  .gh-entries > div:last-child {
+    border-bottom: 0;
+  }
+  .gh-entries > div {
+    display: grid;
+    gap: 0.35rem 2rem;
+    padding: 1rem 0;
+    border-bottom: 1px solid var(--gh-line);
+  }
+  @media (min-width: 48rem) {
+    .gh-entries > div {
+      grid-template-columns: minmax(0, 22rem) minmax(0, 1fr);
+      align-items: baseline;
+    }
+  }
+  .gh-entries dt code {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.875rem;
+    color: var(--sl-color-white);
+    overflow-wrap: anywhere;
+  }
+  .gh-entries dd :global(code) {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.8125rem;
+    white-space: nowrap;
+  }
+  .gh-entries dd {
+    margin: 0;
+    font-size: var(--sl-text-sm);
+    line-height: 1.55;
+    color: var(--sl-color-gray-2);
+  }
+
+  .gh-next {
+    padding-bottom: 4rem;
+  }
+  .gh-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    padding-block: 1.5rem 0.5rem;
+    border-top: 1px solid var(--sl-color-hairline);
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-3);
+  }
+  .gh-foot-name {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--sl-color-gray-2);
+  }
+  .gh-foot-name span {
+    margin-left: 0.4rem;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-foot ul {
+    display: flex;
+    gap: 0.5rem 1.75rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .gh-foot a {
+    display: inline-block;
+    padding-block: 0.8rem;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+  }
+  .gh-foot a:hover {
+    color: var(--gh-accent-text);
+  }
+  .gh-next ol {
+    display: grid;
+    gap: 0.75rem;
+    margin: 2rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  @media (min-width: 40rem) {
+    .gh-next ol {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @media (min-width: 72rem) {
+    .gh-next ol {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+  .gh-next a {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-surface);
+    color: var(--sl-color-white);
+    text-decoration: none;
+    transition: border-color 160ms ease;
+  }
+  .gh-next a:hover,
+  .gh-next a:focus-visible {
+    border-color: var(--sl-color-accent);
+  }
+  .gh-next-n {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    color: var(--gh-accent-text);
+  }
+  .gh-next-t {
+    flex: 1;
+    font-weight: 500;
+  }
+  .gh-next svg {
+    color: var(--sl-color-gray-3);
+    transition: transform 160ms ease;
+  }
+  .gh-next a:hover svg {
+    transform: translateX(3px);
+    color: var(--gh-accent-text);
+  }
+</style>

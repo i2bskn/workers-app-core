@@ -1,0 +1,417 @@
+/*
+ * Theme: "gatehouse" — the core stands in front of the app and decides where each request goes.
+ * Ink and paper neutrals, one brass accent, schematic hairlines, IBM Plex.
+ */
+
+:root {
+  --sl-font: "IBM Plex Sans";
+  --sl-font-mono: "IBM Plex Mono";
+
+  /* Dark (default) */
+  --sl-color-white: #f4f1e8;
+  --sl-color-gray-1: #e3e1da;
+  --sl-color-gray-2: #c3c4c7;
+  --sl-color-gray-3: #8d9097;
+  --sl-color-gray-4: #5b5f68;
+  --sl-color-gray-5: #2c2f36;
+  --sl-color-gray-6: #181a1f;
+  --sl-color-black: #0e0f12;
+
+  --sl-color-accent-low: #3a2d12;
+  --sl-color-accent: #e2ae4a;
+  --sl-color-accent-high: #f3d38f;
+
+  --sl-color-bg-nav: rgb(14 15 18 / 0.82);
+  --sl-color-bg-sidebar: #0e0f12;
+  --sl-color-hairline: #1f2228;
+  --sl-color-hairline-light: #2c2f36;
+  --sl-color-bg-inline-code: #1d2026;
+
+  --gh-surface: #14161a;
+  --gh-surface-2: #1a1d22;
+  --gh-line: #2a2d34;
+  --gh-grid: rgb(244 241 232 / 0.045);
+  --gh-accent-text: #f0c46a;
+  --gh-on-accent: #17130a;
+  --gh-radius: 10px;
+
+  --sl-content-width: 46rem;
+  --sl-line-height: 1.7;
+}
+
+:root[data-theme="light"] {
+  --sl-color-white: #121318;
+  --sl-color-gray-1: #24262c;
+  --sl-color-gray-2: #3a3d44;
+  --sl-color-gray-3: #5c6069;
+  --sl-color-gray-4: #8a8d94;
+  --sl-color-gray-5: #d6d2c6;
+  --sl-color-gray-6: #ece8de;
+  --sl-color-gray-7: #f4f1ea;
+  --sl-color-black: #fbf9f4;
+
+  --sl-color-accent-low: #f4e5c2;
+  --sl-color-accent: #b07a19;
+  --sl-color-accent-high: #6e4a05;
+
+  --sl-color-text-accent: #7d5506;
+  --sl-color-bg-nav: rgb(251 249 244 / 0.85);
+  --sl-color-bg-sidebar: #fbf9f4;
+  --sl-color-hairline: #e6e1d5;
+  --sl-color-hairline-light: #ece8de;
+  --sl-color-bg-inline-code: #efebe1;
+
+  --gh-surface: #f4f1ea;
+  --gh-surface-2: #ede9df;
+  --gh-line: #d9d4c7;
+  --gh-grid: rgb(18 19 24 / 0.05);
+  --gh-accent-text: #7d5506;
+  --gh-on-accent: #17130a;
+}
+
+/* ---------- Base ---------- */
+
+html {
+  font-feature-settings: "ss02";
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--sl-color-accent) 35%, transparent);
+}
+
+/* ---------- Header ---------- */
+
+.header {
+  /* keep the title, search and icons aligned on one baseline */
+  font-size: var(--sl-text-sm);
+}
+
+header.header {
+  backdrop-filter: none;
+}
+
+.page > header {
+  border-bottom: 1px solid var(--sl-color-hairline) !important;
+}
+
+.page > header::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--sl-color-bg-nav);
+  backdrop-filter: saturate(140%) blur(10px);
+}
+
+site-search button[data-open-modal] {
+  border-radius: 999px;
+  border-color: var(--sl-color-hairline-light);
+  background: var(--gh-surface);
+}
+
+/* ---------- Sidebar ---------- */
+
+#starlight__sidebar .top-level > li > details > summary .group-label > span,
+nav.sidebar .group-label span {
+  font-family: var(--__sl-font-mono);
+  font-size: var(--sl-text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+nav.sidebar a {
+  border-radius: 6px;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-2);
+}
+
+nav.sidebar a:hover {
+  color: var(--sl-color-white);
+}
+
+nav.sidebar a[aria-current="page"],
+nav.sidebar a[aria-current="page"]:hover {
+  background: color-mix(in srgb, var(--sl-color-accent) 14%, transparent);
+  color: var(--sl-color-white);
+  font-weight: 500;
+  box-shadow: inset 2px 0 0 var(--sl-color-accent);
+}
+
+/* ---------- Page title ---------- */
+
+.content-panel h1#_top {
+  font-size: clamp(2rem, 1.4rem + 2.4vw, 2.875rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+}
+
+/* ---------- Markdown ---------- */
+
+.sl-markdown-content :is(h2, h3, h4):not(:where(.not-content *)) {
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--sl-color-white);
+}
+
+.sl-markdown-content h2:not(:where(.not-content *)) {
+  font-size: 1.625rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content > h2:first-child,
+.sl-markdown-content > .sl-heading-wrapper:first-child h2 {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 {
+  border-top: 1px solid var(--sl-color-hairline);
+  padding-top: 1.75rem;
+  margin-top: 3rem;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2 h2 {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.sl-markdown-content .sl-heading-wrapper.level-h2:first-child {
+  border-top: 0;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.sl-markdown-content h3:not(:where(.not-content *)) {
+  font-size: 1.25rem;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--sl-color-white);
+  text-decoration-color: color-mix(in srgb, var(--sl-color-accent) 70%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+  color: var(--gh-accent-text);
+  text-decoration-color: currentColor;
+}
+
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+  margin: 0;
+  padding: 0.06em 0.24em;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 5px;
+  font-size: 0.86em;
+  color: var(--sl-color-gray-1);
+}
+
+.sl-markdown-content :is(h2, h3, h4) code:not(:where(.not-content *)) {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.sl-markdown-content a > code {
+  color: inherit;
+}
+
+.sl-markdown-content :is(ul, ol) li::marker {
+  color: var(--sl-color-gray-4);
+}
+
+/* Tables: ruled and quiet. Two-column reference tables stack on narrow screens. */
+.sl-markdown-content table:not(:where(.not-content *)) {
+  display: table;
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  font-size: var(--sl-text-sm);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: var(--gh-radius);
+}
+
+.sl-markdown-content :is(th, td):not(:where(.not-content *)) {
+  border: 0;
+  border-bottom: 1px solid var(--sl-color-hairline);
+  padding: 0.7rem 0.95rem;
+  vertical-align: top;
+}
+
+.sl-markdown-content tr:last-child td {
+  border-bottom: 0;
+}
+
+.sl-markdown-content th:not(:where(.not-content *)) {
+  background: var(--gh-surface);
+  font-family: var(--__sl-font-mono);
+  font-size: var(--sl-text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+  text-align: start;
+}
+
+.sl-markdown-content td:first-child {
+  width: 1%;
+}
+
+
+@media (min-width: 60rem) {
+  .sl-markdown-content td code {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 59.99rem) {
+  .sl-markdown-content table:not(:where(.not-content *)),
+  .sl-markdown-content :is(tbody, tr, td):not(:where(.not-content *)) {
+    display: block;
+    width: auto;
+  }
+  .sl-markdown-content thead:not(:where(.not-content *)) {
+    display: none;
+  }
+  .sl-markdown-content tr:not(:where(.not-content *)) {
+    padding: 0.75rem 0.9rem;
+    border-bottom: 1px solid var(--sl-color-hairline);
+  }
+  .sl-markdown-content tr:last-child {
+    border-bottom: 0;
+  }
+  .sl-markdown-content td:not(:where(.not-content *)) {
+    padding: 0;
+    border: 0;
+  }
+  .sl-markdown-content :is(tbody, tr, td):not(:where(.not-content *)) {
+    margin: 0;
+  }
+  .sl-markdown-content tr td:first-child[data-label]::before,
+  .sl-markdown-content tr td[data-label="description"]::before,
+  .sl-markdown-content tr td[data-label="mode"]::before {
+    display: none;
+  }
+  .sl-markdown-content td:first-child:has(+ td[data-label="mode"]) {
+    display: inline-block;
+    margin-right: 0.5rem;
+  }
+  .sl-markdown-content td[data-label="mode"] {
+    display: inline-block;
+    margin-top: 0 !important;
+    padding: 0 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-accent) 13%, transparent);
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-2xs);
+    line-height: 1.7;
+    color: var(--gh-accent-text);
+  }
+  .sl-markdown-content td:first-child {
+    width: auto;
+  }
+  .sl-markdown-content td:first-child code {
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--sl-color-white);
+  }
+  .sl-markdown-content td + td {
+    margin-top: 0.4rem;
+  }
+  .sl-markdown-content td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.15rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .sl-markdown-content td code {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Asides */
+.starlight-aside {
+  border-radius: var(--gh-radius);
+  border-inline-start-width: 3px;
+}
+
+/* ---------- Footer / pagination ---------- */
+
+.pagination-links a {
+  border-radius: var(--gh-radius);
+  border-color: var(--sl-color-hairline-light);
+  box-shadow: none;
+}
+
+.pagination-links a:hover {
+  border-color: var(--sl-color-accent);
+}
+
+.pagination-links a .link-title {
+  color: var(--sl-color-white);
+  font-weight: 500;
+}
+
+/* ---------- Table of contents ---------- */
+
+.right-sidebar-panel h2 {
+  font-family: var(--__sl-font-mono);
+  font-size: var(--sl-text-2xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3);
+}
+
+starlight-toc a[aria-current="true"] {
+  color: var(--gh-accent-text);
+}
+
+/* ---------- Splash (landing) ---------- */
+
+html:not([data-has-sidebar]) {
+  --sl-content-pad-x: clamp(1rem, 4.5vw, 3rem);
+}
+
+@media (max-width: 49.99rem) {
+  /* The landing has no sidebar menu, so keep the theme switch reachable on phones. */
+  html:not([data-has-sidebar]) .header .right-group {
+    display: flex;
+    gap: 1rem;
+  }
+  html:not([data-has-sidebar]) .header .social-icons::after {
+    display: none;
+  }
+  html:not([data-has-sidebar]) .header starlight-theme-select select {
+    width: 1.75rem;
+    color: transparent;
+  }
+}
+
+@media (min-width: 48rem) {
+  /* Keep short commands and identifiers on one line on wide screens. */
+  .sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+    white-space: nowrap;
+  }
+}
+
+/* The landing has no edit link or pagination, so drop the empty doc footer below it. */
+html:not([data-has-sidebar]) .content-panel footer.sl-flex {
+  display: none;
+}
+html:not([data-has-sidebar]) {
+  --sl-main-pad: 0;
+}

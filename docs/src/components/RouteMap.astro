@@ -1,0 +1,420 @@
+---
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+const routes = [
+  {
+    from: "MCP clients",
+    paths: ["/mcp", "/oauth/token", "/oauth/register", "/.well-known/*"],
+    to: "OAuthProvider",
+    role: "OAuth 2.1 for MCP",
+    body: "Registers clients, issues and validates tokens, then runs your tools on a stateless MCP server.",
+    stores: ["KV · grants", "D1 · users"],
+    href: `${base}/guides/mcp/`,
+  },
+  {
+    from: "Browsers",
+    paths: ["/auth/*", "/authorize", "/api/v1/me", "/api/v1/users"],
+    to: "Core routes",
+    role: "mounted on your Hono app",
+    body: "Setup, sign-in, invitations, MFA, the consent page and the user management API.",
+    stores: ["D1 · users, sessions, MFA"],
+    href: `${base}/getting-started/usage/`,
+  },
+  {
+    from: "Everything else",
+    paths: ["/*"],
+    to: "Your routes",
+    role: "your Hono app",
+    body: "Guard them with <code>requireUser</code>, <code>requireAdmin</code> and <code>requireMode</code>, and read <code>c.var.user</code> and <code>c.var.db</code>.",
+    stores: ["c.var.config · db · user"],
+    href: `${base}/reference/create-core/`,
+  },
+];
+---
+
+<section class="gh-map not-content" aria-labelledby="gh-map-title">
+  <header class="gh-map-head">
+    <p class="gh-kicker">How it fits</p>
+    <h2 id="gh-map-title">One fetch handler in front of your app</h2>
+    <p class="gh-map-lede">
+      <code>core.fetch(app)</code> sends OAuth and <code>/mcp</code> to OAuthProvider and passes everything else to your
+      Hono app, where the core routes sit next to your own.
+    </p>
+  </header>
+
+  <ol class="gh-map-grid">
+    <li class="gh-map-hub" aria-hidden="true">
+      <span class="gh-hub-label">core.fetch(app)</span>
+    </li>
+    {
+      routes.map((r, i) => (
+        <li class="gh-row" style={`--i:${i}`}>
+          <div class="gh-req">
+            <span class="gh-from">{r.from}</span>
+            <ul class="gh-paths" aria-label={`Paths from ${r.from}`}>
+              {r.paths.map((p) => (
+                <li>
+                  <code>{p}</code>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div class="gh-wire" aria-hidden="true">
+            <span class="gh-pulse" />
+          </div>
+          <a class="gh-dest" href={r.href}>
+            <span class="gh-dest-role">{r.role}</span>
+            <span class="gh-dest-name">
+              {r.to}
+              <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+                <path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+              </svg>
+            </span>
+            <span class="gh-dest-body" set:html={r.body} />
+            <span class="gh-stores">
+              {r.stores.map((s) => (
+                <span>{s}</span>
+              ))}
+            </span>
+          </a>
+        </li>
+      ))
+    }
+  </ol>
+  <p class="gh-map-note">
+    OAuth paths are served on https origins, on loopback http for local development, and only on
+    <code>APP_ORIGIN</code> in oidc mode. On other origins they return 404.
+  </p>
+</section>
+
+<style>
+  .gh-map {
+    position: relative;
+    padding-block: 4rem 1rem;
+    border-top: 1px solid var(--sl-color-hairline);
+  }
+  .gh-kicker {
+    margin: 0 0 0.75rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--gh-accent-text);
+  }
+  .gh-map-head h2 {
+    margin: 0;
+    font-size: clamp(1.75rem, 1.3rem + 1.6vw, 2.5rem);
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: var(--sl-color-white);
+    text-wrap: balance;
+  }
+  .gh-map-lede {
+    max-width: 40rem;
+    margin: 1rem 0 0;
+    color: var(--sl-color-gray-2);
+    line-height: 1.65;
+  }
+  code {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.875em;
+  }
+  .gh-map-lede code,
+  .gh-map-note code {
+    padding: 0.05em 0.35em;
+    border: 1px solid var(--gh-line);
+    border-radius: 5px;
+    color: var(--sl-color-gray-1);
+  }
+
+  .gh-map-grid {
+    --hub-w: 0px;
+    position: relative;
+    display: grid;
+    gap: 1rem;
+    margin: 2.5rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  /* Mobile: the hub is a heading strip, each row stacks request → wire → destination. */
+  .gh-map-hub {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .gh-map-hub {
+    align-items: flex-start;
+  }
+  @media (max-width: 55.99rem) {
+    .gh-map-grid {
+      padding-left: 1.25rem;
+    }
+    .gh-map-grid::before {
+      content: "";
+      position: absolute;
+      top: 1.25rem;
+      bottom: 0;
+      left: 0.5rem;
+      width: 1px;
+      background: var(--sl-color-accent);
+    }
+    .gh-map-hub {
+      margin-left: -1.25rem;
+      position: relative;
+      z-index: 1;
+    }
+    .gh-row {
+      position: relative;
+    }
+    .gh-row::before {
+      content: "";
+      position: absolute;
+      top: 1.6rem;
+      left: calc(-0.75rem - 1px);
+      width: 0.75rem;
+      height: 1px;
+      background: var(--sl-color-accent);
+    }
+    .gh-row:last-child::after {
+      content: "";
+      position: absolute;
+      top: calc(1.6rem + 1px);
+      bottom: -1px;
+      left: calc(-0.75rem - 2px);
+      width: 3px;
+      background: var(--sl-color-bg);
+    }
+  }
+  .gh-hub-label {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-accent) 12%, var(--sl-color-black));
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-white);
+  }
+
+  .gh-row {
+    display: grid;
+    grid-template-rows: auto 1.75rem auto;
+    padding: 1rem;
+    border: 1px solid var(--gh-line);
+    border-radius: var(--gh-radius);
+    background: var(--gh-surface);
+  }
+  .gh-row > * {
+    min-width: 0;
+  }
+
+  .gh-from {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-paths {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .gh-paths code {
+    display: inline-block;
+    padding: 0.2rem 0.5rem;
+    border: 1px solid var(--gh-line);
+    border-radius: 6px;
+    background: var(--sl-color-black);
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-1);
+    white-space: nowrap;
+  }
+
+  .gh-wire {
+    position: relative;
+    justify-self: start;
+    width: 1px;
+    margin-left: 1.25rem;
+    background: var(--gh-line);
+    overflow: clip;
+  }
+  .gh-pulse {
+    display: none;
+  }
+
+  .gh-dest {
+    display: grid;
+    gap: 0.35rem;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--gh-line);
+    border-radius: 8px;
+    background: var(--sl-color-black);
+    color: inherit;
+    text-decoration: none;
+    transition:
+      border-color 160ms ease,
+      transform 160ms ease;
+  }
+  .gh-dest:hover,
+  .gh-dest:focus-visible {
+    border-color: var(--sl-color-accent);
+  }
+  .gh-dest:hover .gh-dest-name svg {
+    transform: translateX(3px);
+  }
+  .gh-dest-role {
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-dest-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 1.125rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--sl-color-white);
+  }
+  .gh-dest-name svg {
+    color: var(--gh-accent-text);
+    transition: transform 160ms ease;
+  }
+  .gh-dest-body :global(code) {
+    font-family: var(--__sl-font-mono);
+    font-size: 0.8125rem;
+    color: var(--sl-color-gray-1);
+  }
+  .gh-dest-body {
+    font-size: var(--sl-text-sm);
+    line-height: 1.55;
+    color: var(--sl-color-gray-2);
+  }
+  .gh-stores {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    margin-top: 0.4rem;
+  }
+  .gh-stores span {
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--sl-color-accent) 13%, transparent);
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-2xs);
+    color: var(--gh-accent-text);
+  }
+
+  .gh-map-note {
+    margin: 1.25rem 0 0;
+    font-size: var(--sl-text-xs);
+    line-height: 1.6;
+    color: var(--sl-color-gray-3);
+  }
+
+  /* Desktop: requests on the left, the hub as a spine, destinations on the right. */
+  @media (min-width: 56rem) {
+    .gh-map-grid {
+      --hub-w: 9.5rem;
+      grid-template-columns: minmax(0, 1fr) var(--hub-w) minmax(0, 1.15fr);
+      gap: 1.25rem 0;
+    }
+    .gh-map-hub {
+      grid-column: 2;
+      grid-row: 1 / span 3;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .gh-map-hub::before {
+      content: "";
+      position: absolute;
+      inset: 1.5rem auto 1.5rem 50%;
+      width: 1px;
+      background: linear-gradient(
+        to bottom,
+        transparent,
+        var(--sl-color-accent) 18%,
+        var(--sl-color-accent) 82%,
+        transparent
+      );
+    }
+    .gh-hub-label {
+      position: relative;
+      z-index: 1;
+      writing-mode: vertical-rl;
+      transform: rotate(180deg);
+      padding: 0.9rem 0.45rem;
+    }
+    .gh-row {
+      display: contents;
+    }
+    .gh-req {
+      grid-column: 1;
+      grid-row: calc(var(--i) + 1);
+      align-self: start;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--gh-line);
+      border-radius: var(--gh-radius);
+      background: var(--gh-surface);
+    }
+    .gh-wire {
+      grid-column: 2;
+      grid-row: calc(var(--i) + 1);
+      align-self: start;
+      margin-top: 1.5rem !important;
+      justify-self: stretch;
+      width: auto;
+      height: 1px;
+      margin: 0;
+      background: var(--gh-line);
+    }
+    .gh-dest {
+      grid-column: 3;
+      grid-row: calc(var(--i) + 1);
+      background: var(--gh-surface);
+    }
+  }
+
+  @media (min-width: 56rem) and (prefers-reduced-motion: no-preference) {
+    .gh-pulse {
+      display: block;
+      position: absolute;
+      top: -2px;
+      left: 0;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--sl-color-accent);
+      box-shadow: 0 0 8px var(--sl-color-accent);
+      animation: gh-travel 3.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+      animation-delay: calc(var(--i) * 0.9s);
+      opacity: 0;
+    }
+  }
+  @keyframes gh-travel {
+    0% {
+      transform: translateX(0);
+      opacity: 0;
+    }
+    8% {
+      opacity: 1;
+    }
+    92% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateX(calc(var(--hub-w) - 5px));
+      opacity: 0;
+    }
+  }
+</style>

@@ -1,0 +1,241 @@
+---
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { Code, LinkButton } from "@astrojs/starlight/components";
+
+const { data } = Astro.locals.starlightRoute.entry;
+const { title = data.title, tagline, actions = [] } = data.hero || {};
+
+// The docs are built from docs/, so the package manifest is one level up.
+const pkg = JSON.parse(readFileSync(resolve(process.cwd(), "../package.json"), "utf8")) as {
+  version: string;
+};
+
+const install = `pnpm add \\
+  @i2bskn/workers-app-core \\
+  hono drizzle-orm zod openid-client \\
+  @cloudflare/workers-oauth-provider \\
+  @modelcontextprotocol/sdk \\
+  @cfworker/json-schema`;
+
+const sample = `// src/core.ts
+export const core = createCore<Bindings>({
+  brand: { id: "myapp", name: "My App" },
+  mcp: {
+    serverInfo: {
+      name: "myapp",
+      version: "1.0.0",
+    },
+    register: registerTools,
+  },
+  consent: {
+    description: "Reads your projects.",
+  },
+});
+
+// src/index.ts
+export default { fetch: core.fetch(app) };`;
+---
+
+<section class="gh-hero not-content" aria-labelledby="_top">
+  <div class="gh-hero-copy">
+    <p class="gh-eyebrow">
+      <span class="gh-version">v{pkg.version}</span>
+      <span class="gh-dot" aria-hidden="true"></span>
+      Hono · Cloudflare Workers · D1 · KV
+    </p>
+    <h1 id="_top" data-page-title set:html={title} />
+    {tagline && <p class="gh-tagline" set:html={tagline} />}
+    <p class="gh-lang">
+      <span class="gh-lang-tag">日本語</span>
+      The server pages and API messages are in Japanese.
+    </p>
+    <div class="gh-install">
+      <p class="gh-install-label">Install with its peer dependencies</p>
+      <Code code={install} lang="sh" frame="none" wrap={false} />
+    </div>
+    {
+      actions.length > 0 && (
+        <div class="gh-actions">
+          {actions.map(({ attrs: { class: className, ...attrs } = {}, icon, link: href, text, variant }) => (
+            <LinkButton {href} {variant} icon={icon?.name} class:list={[className]} {...attrs}>
+              {text}
+            </LinkButton>
+          ))}
+        </div>
+      )
+    }
+  </div>
+  <div class="gh-hero-code">
+    <Code code={sample} lang="ts" title="Create the core and serve it" wrap={false} />
+  </div>
+</section>
+
+<style>
+  .gh-hero {
+    display: grid;
+    gap: 2.5rem;
+    padding-block: 1.5rem 3rem;
+  }
+  .gh-hero > * {
+    min-width: 0;
+  }
+  @media (min-width: 62rem) {
+    .gh-hero {
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+      align-items: start;
+      gap: 3.5rem;
+      padding-block: 3.5rem 4.5rem;
+    }
+  }
+
+  .gh-eyebrow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    margin: 0 0 1.5rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-xs);
+    letter-spacing: 0.02em;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--sl-color-accent);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--sl-color-accent) 22%, transparent);
+  }
+  .gh-version {
+    padding: 0.125rem 0.5rem;
+    border: 1px solid var(--gh-line);
+    border-radius: 999px;
+    color: var(--sl-color-gray-2);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(2.375rem, 1.6rem + 3.4vw, 4rem);
+    font-weight: 600;
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+    color: var(--sl-color-white);
+    text-wrap: balance;
+  }
+  .gh-tagline {
+    max-width: 34rem;
+    margin: 1.5rem 0 0;
+    font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.1875rem);
+    line-height: 1.6;
+    color: var(--sl-color-gray-2);
+    text-wrap: pretty;
+  }
+
+  .gh-lang {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 1.25rem 0 0;
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+  }
+  .gh-lang-tag {
+    flex: none;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--sl-color-accent);
+    border-radius: 999px;
+    font-size: var(--sl-text-xs);
+    font-weight: 500;
+    color: var(--gh-accent-text);
+  }
+
+  .gh-install {
+    margin-top: 2rem;
+  }
+  @media (min-width: 62rem) {
+    .gh-install {
+      max-width: 34rem;
+    }
+  }
+  .gh-install :global(.expressive-code .copy button) {
+    opacity: 1;
+  }
+  .gh-install-label {
+    margin: 0 0 0.5rem;
+    font-family: var(--__sl-font-mono);
+    font-size: var(--sl-text-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--sl-color-gray-3);
+  }
+  .gh-install :global(.expressive-code .frame pre) {
+    border-radius: 8px;
+  }
+
+  .gh-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 1.25rem;
+    margin-top: 2rem;
+  }
+  .gh-actions :global(.sl-link-button.primary) {
+    background: var(--sl-color-accent);
+    border-color: var(--sl-color-accent);
+    color: var(--gh-on-accent);
+    font-weight: 600;
+  }
+  .gh-actions :global(.sl-link-button) {
+    border-radius: 999px;
+  }
+
+  @media (min-width: 62rem) {
+    .gh-hero-code {
+      margin-top: 3.1rem;
+    }
+  }
+  @media (max-width: 40rem) {
+    .gh-hero-code :global(.expressive-code) {
+      --ec-codeFontSize: 0.75rem;
+    }
+    .gh-dot {
+      display: none;
+    }
+  }
+  @media (max-width: 24rem) {
+    .gh-hero-code :global(.expressive-code) {
+      --ec-codeFontSize: 0.6875rem;
+    }
+  }
+  .gh-install :global(.expressive-code pre > code) {
+    padding-inline-end: 2.75rem;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .gh-hero-copy > *,
+    .gh-hero-code {
+      animation: gh-rise 700ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    .gh-hero-copy > :nth-child(2) {
+      animation-delay: 60ms;
+    }
+    .gh-hero-copy > :nth-child(3) {
+      animation-delay: 120ms;
+    }
+    .gh-hero-copy > :nth-child(4) {
+      animation-delay: 180ms;
+    }
+    .gh-hero-copy > :nth-child(5) {
+      animation-delay: 240ms;
+    }
+    .gh-hero-code {
+      animation-delay: 200ms;
+    }
+  }
+  @keyframes gh-rise {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+  }
+</style>

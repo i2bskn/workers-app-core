@@ -1,0 +1,51 @@
+---
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="gh-title" translate="no">
+  <svg class="gh-mark" viewBox="0 0 28 28" width="28" height="28" aria-hidden="true">
+    <rect x="1.5" y="1.5" width="25" height="25" rx="6.5" fill="none" stroke="currentColor" stroke-width="1.5" />
+    <path d="M9 21V12.5a5 5 0 0 1 10 0V21" fill="none" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="14" cy="13.25" r="1.9" class="gh-mark-key" />
+    <path d="M14 15v3.2" stroke-width="1.5" stroke-linecap="round" class="gh-mark-key-stem" />
+  </svg>
+  <span class="gh-name"><span class="gh-scope">@i2bskn/</span>workers-app-core</span>
+</a>
+
+<style>
+  .gh-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.625rem;
+    min-width: 0;
+    color: var(--sl-color-white);
+    text-decoration: none;
+  }
+  .gh-mark {
+    flex: none;
+    color: var(--sl-color-white);
+  }
+  .gh-mark-key {
+    fill: var(--sl-color-accent);
+  }
+  .gh-mark-key-stem {
+    stroke: var(--sl-color-accent);
+  }
+  .gh-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--__sl-font-mono);
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .gh-scope {
+    color: var(--sl-color-gray-3);
+  }
+  @media (max-width: 30rem) {
+    .gh-scope {
+      display: none;
+    }
+  }
+</style>
