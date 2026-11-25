@@ -1,0 +1,28 @@
+---
+import Default from "@astrojs/starlight/components/SocialIcons.astro";
+---
+
+<a class="gh-all-docs" href="https://docs.i2bskn.com/">All docs</a>
+<Default />
+
+<style>
+  .gh-all-docs {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.4rem 0;
+    font-size: var(--sl-text-sm);
+    font-weight: 500;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .gh-all-docs:hover {
+    color: var(--gh-accent-text);
+  }
+  /* On phones the header has no room for it; the landing footer and the menu link to the index. */
+  @media (max-width: 30rem) {
+    :global(.header) .gh-all-docs {
+      display: none;
+    }
+  }
+</style>

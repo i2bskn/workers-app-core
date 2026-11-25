@@ -2,9 +2,9 @@
 import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 
-// Served by GitHub Pages as a project site: https://i2bskn.github.io/workers-app-core/
+// Served by GitHub Pages as a project site under the account domain: https://docs.i2bskn.com/workers-app-core/
 export default defineConfig({
-  site: "https://i2bskn.github.io",
+  site: "https://docs.i2bskn.com",
   base: "/workers-app-core",
   devToolbar: { enabled: false },
   integrations: [
@@ -26,6 +26,7 @@ export default defineConfig({
       components: {
         SiteTitle: "./src/components/SiteTitle.astro",
         Hero: "./src/components/Hero.astro",
+        SocialIcons: "./src/components/SocialIcons.astro",
       },
       expressiveCode: {
         themes: ["github-dark-dimmed", "github-light"],

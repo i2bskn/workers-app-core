@@ -26,13 +26,13 @@ The app shares its peer dependencies with the core. The core installs its WebAut
 
 ## Documentation
 
-https://i2bskn.github.io/workers-app-core/
+https://docs.i2bskn.com/workers-app-core/
 
-- [Usage](https://i2bskn.github.io/workers-app-core/getting-started/usage/)
-- [Configuration](https://i2bskn.github.io/workers-app-core/guides/configuration/)
-- [`createCore` options](https://i2bskn.github.io/workers-app-core/reference/create-core/)
-- [Security behaviors](https://i2bskn.github.io/workers-app-core/reference/security/)
-- [Upgrading](https://i2bskn.github.io/workers-app-core/reference/upgrading/) (breaking changes by version)
+- [Usage](https://docs.i2bskn.com/workers-app-core/getting-started/usage/)
+- [Configuration](https://docs.i2bskn.com/workers-app-core/guides/configuration/)
+- [`createCore` options](https://docs.i2bskn.com/workers-app-core/reference/create-core/)
+- [Security behaviors](https://docs.i2bskn.com/workers-app-core/reference/security/)
+- [Upgrading](https://docs.i2bskn.com/workers-app-core/reference/upgrading/) (breaking changes by version)
 
 The source of the documentation is in [`docs/`](docs/).
 
